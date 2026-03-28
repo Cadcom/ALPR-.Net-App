@@ -10,7 +10,7 @@ namespace ALPR.Detection
     /// <summary>
     /// ONNX modeli kullanarak plaka karakteri tespiti yapan sýnýf.
     /// Thread-safe deðildir, her thread için ayrý instance oluþturulmalýdýr.
-    /// GPU desteði: CUDA (NVIDIA) ve DirectML (Windows)
+    /// GPU desteði: CUDA (NVIDIA), DirectML (Windows) ve CPU
     /// </summary>
     public sealed class PlateCharDetector : IDisposable
     {
@@ -24,15 +24,30 @@ namespace ALPR.Detection
         private readonly bool _swapRB;
         private bool _disposed;
 
+        private const int BlankTokenIndex = 36; // Bu ayar KESÝNLÝKLE KORUNMALI!
+
+        private readonly string[] PlateVocabulary = new string[]
+        {
+            "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+            "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L",
+            "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
+            " ", // Index 36: Blank Token.
+        };
+
+        // Modelin beklediði kesin giriþ boyutlarý
+        private const int InputHeight = 64;
+        private const int InputWidth = 128;
+        private const string InputName = "input"; // Model metadata'sýndan alýndý
+
         // Karakter sýnýflarý: 0-9 rakamlar, sonra A-Z harfler
         private static readonly string[] CharacterClasses = BuildCharacterClasses();
 
         /// <summary>
-        /// Karakter tespit modelini yükler. Otomatik olarak GPU kullanýr (varsa).
+        /// Karakter tespit modelini yükler. GPU desteði ile optimize edilmiþ.
         /// </summary>
         /// <param name="modelPath">ONNX model dosya yolu</param>
         /// <param name="swapRB">RGB-BGR renk kanallarýný deðiþtir</param>
-        /// <param name="useGpu">GPU kullan (true: otomatik tespit, false: sadece CPU)</param>
+        /// <param name="useGpu">GPU kullan (true: CUDA/DirectML otomatik tespit, false: sadece CPU)</param>
         public PlateCharDetector(string modelPath, bool swapRB = false, bool useGpu = true)
         {
             if (string.IsNullOrWhiteSpace(modelPath))
@@ -41,19 +56,133 @@ namespace ALPR.Detection
             if (!File.Exists(modelPath))
                 throw new FileNotFoundException($"Model dosyasý bulunamadý: {modelPath}", modelPath);
 
-            // GPU/CPU SessionOptions oluþtur
-            var sessionOptions = ExecutionProviderHelper.CreateOptimizedSessionOptions(preferGpu: useGpu);
-
-            _session = new InferenceSession(modelPath, sessionOptions);
-            _inputName = _session.InputMetadata.Keys.First();
             _swapRB = swapRB;
 
-            (_inputHeight, _inputWidth) = InferInputDimensions(_session.InputMetadata[_inputName].Dimensions);
+            // GPU/CPU SessionOptions oluþtur - ExecutionProviderHelper kullanarak
+            // Python'daki providers=['DmlExecutionProvider', 'CUDAExecutionProvider', 'CPUExecutionProvider'] ile ayný mantýk
+            var sessionOptions = ExecutionProviderHelper.CreateOptimizedSessionOptions(preferGpu: useGpu);
+
+            try
+            {
+                _session = new InferenceSession(modelPath, sessionOptions);
+                _inputName = _session.InputMetadata.Keys.First();
+
+                (_inputHeight, _inputWidth) = InferInputDimensions(_session.InputMetadata[_inputName].Dimensions);
+
+                // Log model yükleme bilgisi
+                System.Diagnostics.Debug.WriteLine($"? PlateCharDetector yüklendi: {Path.GetFileName(modelPath)}");
+                System.Diagnostics.Debug.WriteLine($"   Input: {_inputName} [{_inputHeight}x{_inputWidth}]");
+                System.Diagnostics.Debug.WriteLine($"   GPU: {(useGpu ? "Ýstendi (CUDA/DirectML)" : "Pasif - CPU Only")}");
+            }
+            catch (Exception ex)
+            {
+                sessionOptions?.Dispose();
+                System.Diagnostics.Debug.WriteLine($"? PlateCharDetector yükleme hatasý: {ex.Message}");
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Plaka görüntüsünden OCR ile metin okuma (GPU destekli)
+        /// </summary>
+        public CharacterDetectionResult2 RunOnnxPlateRecognition(Bitmap bitmap)
+        {
+            using var mat = BitmapConverter.ToMat(bitmap);
+            using var resizedMat = new Mat();
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            Cv2.Resize(mat, resizedMat, new OpenCvSharp.Size(InputWidth, InputHeight));
+
+            // Renk çevirme: BGR -> RGB 
+            Cv2.CvtColor(resizedMat, resizedMat, ColorConversionCodes.BGR2RGB);
+
+            // Tensör oluþtur (B, H, W, C) -> { 1, 64, 128, 3 }
+            var inputTensor = new DenseTensor<byte>(new[] { 1, InputHeight, InputWidth, 3 });
+
+            for (int y = 0; y < InputHeight; y++)
+            {
+                for (int x = 0; x < InputWidth; x++)
+                {
+                    var color = resizedMat.At<Vec3b>(y, x);
+                    inputTensor[0, y, x, 0] = color.Item0; // R
+                    inputTensor[0, y, x, 1] = color.Item1; // G
+                    inputTensor[0, y, x, 2] = color.Item2; // B
+                }
+            }
+
+            // ONNX ile tahmin (GPU üzerinde çalýþýr)
+            var inputs = new List<NamedOnnxValue>
+            {
+                NamedOnnxValue.CreateFromTensor(InputName, inputTensor)
+            };
+
+            using var results = _session.Run(inputs);
+            var outputTensor = results.First().AsTensor<float>();
+
+            // CTC post-processing
+            string plateText = DecodeCTC(outputTensor);
+
+            sw.Stop();
+
+            return new CharacterDetectionResult2(plateText, sw.ElapsedMilliseconds);
+        }
+
+        /// <summary>
+        /// CTC çýktýsýný Greedy Decoding ile plaka metnine çevirir
+        /// </summary>
+        private string DecodeCTC(Tensor<float> outputTensor)
+        {
+            var dimensions = outputTensor.Dimensions.ToArray();
+            int sequenceLength = 0;
+            int vocabularySize = PlateVocabulary.Length;
+
+            if (dimensions.Length == 3 && dimensions[0] == 1)
+            {
+                sequenceLength = dimensions[1];
+                vocabularySize = dimensions[2];
+            }
+            else if (dimensions.Length == 2)
+            {
+                sequenceLength = dimensions[0];
+                vocabularySize = dimensions[1];
+            }
+            
+            var resultChars = new List<string>();
+            string lastChar = "";
+
+            for (int t = 0; t < sequenceLength; t++)
+            {
+                float maxProb = -1.0f;
+                int bestIndex = -1;
+
+                for (int v = 0; v < vocabularySize; v++)
+                {
+                    float currentProb = (dimensions.Length == 3) ? outputTensor[0, t, v] : outputTensor[t, v];
+
+                    if (currentProb > maxProb)
+                    {
+                        maxProb = currentProb;
+                        bestIndex = v;
+                    }
+                }
+
+                string currentChar = PlateVocabulary[bestIndex];
+                bool isBlank = (bestIndex == BlankTokenIndex);
+
+                // CTC Greedy Kurallarý
+                if (!isBlank)
+                {
+                    resultChars.Add(currentChar);
+                }
+
+                lastChar = currentChar;
+            }
+
+            return string.Join("", resultChars);
         }
 
         /// <summary>
         /// Model metadata'sýndan input boyutlarýný çýkarýr.
-        /// NCHW ([N,3,H,W]) veya NHWC ([N,H,W,3]) formatlarýný destekler.
         /// </summary>
         private static (int Height, int Width) InferInputDimensions(ReadOnlySpan<int> dims)
         {
@@ -76,13 +205,12 @@ namespace ALPR.Detection
                 return (h, w);
             }
 
-            // Varsayýlan: NCHW
             return (dims[2] > 0 ? dims[2] : DefaultModelSize,
                     dims[3] > 0 ? dims[3] : DefaultModelSize);
         }
 
         /// <summary>
-        /// ROI görüntüsünde karakter tespiti yapar.
+        /// ROI görüntüsünde karakter tespiti yapar (eski metod - uyumluluk için korunuyor)
         /// </summary>
         public CharacterDetectionResult Detect(
             Bitmap roiBitmap,
@@ -141,7 +269,6 @@ namespace ALPR.Detection
             var data = new float[length];
             Marshal.Copy(blob.Data, data, 0, length);
 
-            // BlobFromImage NCHW layout üretir
             return new DenseTensor<float>(data, new[] { 1, 3, _inputHeight, _inputWidth });
         }
 
@@ -188,7 +315,6 @@ namespace ALPR.Detection
         private static (int ChannelIndex, int DetectionIndex, int ChannelCount, int DetectionCount) DetermineOutputLayout(
             ReadOnlySpan<int> dims)
         {
-            // Heuristic: Channel boyutu genellikle Detection sayýsýndan küçüktür
             if (dims[1] > dims[2])
             {
                 return (ChannelIndex: 2, DetectionIndex: 1, ChannelCount: dims[2], DetectionCount: dims[1]);
@@ -223,13 +349,11 @@ namespace ALPR.Detection
                     ? output[0, ch, detectionIndex]
                     : output[0, detectionIndex, ch];
 
-            // Bounding box
             float cx = GetValue(0);
             float cy = GetValue(1);
             float w = GetValue(2);
             float h = GetValue(3);
 
-            // En yüksek sýnýf skoru
             int bestClassId = classStart;
             float bestScore = float.MinValue;
 
@@ -243,14 +367,12 @@ namespace ALPR.Detection
                 }
             }
 
-            // Confidence threshold kontrolü
             if (bestScore < confidenceThreshold)
                 return null;
 
             int classId = bestClassId - classStart;
             string label = GetCharacterLabel(classId);
 
-            // Merkez koordinattan köþe koordinatýna dönüþtür ve ölçekle
             float x = (cx - w / 2f) * scaleX;
             float y = (cy - h / 2f) * scaleY;
             w *= scaleX;
@@ -313,16 +435,14 @@ namespace ALPR.Detection
 
         private static string[] BuildCharacterClasses()
         {
-            var classes = new string[36]; // 10 rakam + 26 harf
+            var classes = new string[36];
             int index = 0;
 
-            // 0-9 rakamlar
             for (int i = 0; i <= 9; i++)
             {
                 classes[index++] = i.ToString();
             }
 
-            // A-Z harfler
             for (char c = 'A'; c <= 'Z'; c++)
             {
                 classes[index++] = c.ToString();
@@ -348,16 +468,14 @@ namespace ALPR.Detection
         }
     }
 
-    /// <summary>
-    /// Karakter tespiti sonucunu temsil eder.
-    /// </summary>
     public sealed record CharacterDetectionResult(
         List<PlateCharDetection> Detections,
         long ElapsedMs);
 
-    /// <summary>
-    /// Tek bir karakter tespitini temsil eder.
-    /// </summary>
+    public sealed record CharacterDetectionResult2(
+        string Detection,
+        long ElapsedMs);
+
     public sealed class PlateCharDetection
     {
         public int X { get; set; }

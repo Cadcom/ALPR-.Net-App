@@ -2,12 +2,8 @@
 using Microsoft.ML.OnnxRuntime.Tensors;
 using OpenCvSharp;
 using OpenCvSharp.Extensions;
-using System;
 using System.Diagnostics;
-using System.Drawing;
-using System.IO;
-using System.Windows.Forms;
-using static System.Windows.Forms.VisualStyles.VisualStyleElement;
+
 
 namespace ALPR
 {
@@ -117,69 +113,64 @@ namespace ALPR
 
         private readonly string[] PlateVocabulary = new string[]
         {
-    "0", // Index 0: YENİ DÜZELTME! (Eskiden 'Z' idi)
-    "1", // Index 1
-    "2", // Index 2
-    "3", // Index 3
-    "4", // Index 4
-    "5", // Index 5
-    "6", // Index 6
-    "7", // Index 7
-    "8", // Index 8
-    "9", // Index 9
+            "0", // Index 0: YENİ DÜZELTME! (Eskiden 'Z' idi)
+            "1", // Index 1
+            "2", // Index 2
+            "3", // Index 3
+            "4", // Index 4
+            "5", // Index 5
+            "6", // Index 6
+            "7", // Index 7
+            "8", // Index 8
+            "9", // Index 9
     
-    "A", // Index 10
-    // Index 11'den 35'e kadar olan harfler (25 harf)
+            "A", // Index 10
+            // Index 11'den 35'e kadar olan harfler (25 harf)
     
-    "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", // B-K (10)
-    "L", "M", // L-M (2)
-    "N", // Index 23: YENİ DÜZELTME! (Eskiden 'M' idi)
-    "O", "P", "Q", "R",
-    "S", // Index 28: YENİ DÜZELTME! (Eskiden 'Q' idi)
-    "T", "U", "V", "W", "X", "Y", 
+            "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", // B-K (10)
+            "L", "M", // L-M (2)
+            "N", // Index 23: YENİ DÜZELTME! (Eskiden 'M' idi)
+            "O", "P", "Q", "R",
+            "S", // Index 28: YENİ DÜZELTME! (Eskiden 'Q' idi)
+            "T", "U", "V", "W", "X", "Y", 
     
-    // Index 35'te kalır, Z eksik (Çünkü 0'ı başa aldık)
+            // Index 35'te kalır, Z eksik (Çünkü 0'ı başa aldık)
     
-    // YENİDEN SAYIMI KONTROL EDELİM (En baştan 37'yi tutturmak için)
-    // 0-9 (10 eleman) + A-Z (26 eleman) + Blank (1 eleman) = 37 olmalı.
-    // Sizin Listenizde: 0-9 (10 eleman) + A (1) + B-Y (24) + Blank (1) = 36 eleman!
+            // YENİDEN SAYIMI KONTROL EDELİM (En baştan 37'yi tutturmak için)
+            // 0-9 (10 eleman) + A-Z (26 eleman) + Blank (1 eleman) = 37 olmalı.
+            // Sizin Listenizde: 0-9 (10 eleman) + A (1) + B-Y (24) + Blank (1) = 36 eleman!
 
-    // KESİN VE NİHAİ DİZİNİN YAPISI (37 eleman)
-    "0", // Index 0 (0-9 ve Blank'ın yeri değişti)
-    "1", // Index 1
-    "2", // Index 2
-    "3", // Index 3
-    "4", // Index 4
-    "5", // Index 5
-    "6", // Index 6
-    "7", // Index 7
-    "8", // Index 8
-    "9", // Index 9 (10 Rakam bitti)
+            // KESİN VE NİHAİ DİZİNİN YAPISI (37 eleman)
+            "0", // Index 0 (0-9 ve Blank'ın yeri değişti)
+            "1", // Index 1
+            "2", // Index 2
+            "3", // Index 3
+            "4", // Index 4
+            "5", // Index 5
+            "6", // Index 6
+            "7", // Index 7
+            "8", // Index 8
+            "9", // Index 9 (10 Rakam bitti)
 
-    "A", // Index 10
-    "B", // Index 11
-    "C", // Index 12
-    "D", "E", "F", "G", "H", "I", "J", "K", "L",
-    "M", // Index 23 (YANLIŞ. Index 23 'N' olmalı!)
-    "N", // Index 23: YENİ DÜZELTME! (Eskiden 'M' idi)
-    "O", "P", "Q", "R",
-    "S", // Index 28: YENİ DÜZELTME! (Eskiden 'Q' idi)
-    "T", "U", "V", "W", "X", "Y",
-    "Z", // YENİ EKLENEN 'Z'
+            "A", // Index 10
+            "B", // Index 11
+            "C", // Index 12
+            "D", "E", "F", "G", "H", "I", "J", "K", "L",
+            "M", // Index 23 (YANLIŞ. Index 23 'N' olmalı!)
+            "N", // Index 23: YENİ DÜZELTME! (Eskiden 'M' idi)
+            "O", "P", "Q", "R",
+            "S", // Index 28: YENİ DÜZELTME! (Eskiden 'Q' idi)
+            "T", "U", "V", "W", "X", "Y",
+            "Z", // YENİ EKLENEN 'Z'
     
-    " ", // Index 36: Blank Token.
+            " ", // Index 36: Blank Token.
         };
-        // Not: Harflerin arasındaki sıra da bozuk olabilir. Alfabetik sırayı bozarak 'N' ve 'S'i doğru yerlere koyun.
-        // Lütfen bu harfleri listenizde manuel olarak düzeltin: Index 23 = 'N', Index 28 = 'S'
-
-
 
 
         // Modelin beklediği kesin giriş boyutları
         private const int InputHeight = 64;
         private const int InputWidth = 128;
         private const string InputName = "input"; // Model metadata'sından alındı
-        private const float Scale = 1.0f / 255.0f; // 0.00392156862745098
 
         // Bitmap'ten Mat'a çevirme için uygun bir konverter kullanılmalıdır (OpenCvSharp.Extensions).
         // Bu metodun doğru çalışması için, input olarak gelen 'bitmap' değişkeninin 

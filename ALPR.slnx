@@ -1,3 +1,4 @@
 <Solution>
   <Project Path="ALPR/ALPR.csproj" />
+  <Project Path="AlprApi/AlprApi.csproj" Id="133e57fa-fc34-47e0-99c3-248504c0672b" />
 </Solution>

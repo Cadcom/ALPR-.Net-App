@@ -5,17 +5,19 @@ namespace ALPR.Detection
 {
     /// <summary>
     /// ONNX Runtime için GPU/CPU ExecutionProvider yönetimi
-    /// CUDA (NVIDIA GPU) desteði ile optimize edilmiþ
+    /// DirectML (Windows GPU), CUDA (NVIDIA GPU) ve CPU desteði
+    /// Python fast_plate_ocr'daki providers=['DmlExecutionProvider', 'CUDAExecutionProvider', 'CPUExecutionProvider'] ile ayný mantýk
     /// </summary>
     public static class ExecutionProviderHelper
     {
         private static readonly Lazy<bool> _cudaAvailability = new(CheckCudaAvailability);
+        private static readonly Lazy<bool> _directMlAvailability = new(CheckDirectMLAvailability);
         
         public static Action<string>? Logger { get; set; }
 
         /// <summary>
         /// Optimize edilmiþ SessionOptions oluþturur
-        /// Önce CUDA (NVIDIA GPU), sonra CPU dener
+        /// Öncelik sýrasý: DirectML (Windows GPU) -> CUDA (NVIDIA GPU) -> CPU
         /// </summary>
         public static SessionOptions CreateOptimizedSessionOptions(bool preferGpu = true)
         {
@@ -30,18 +32,57 @@ namespace ALPR.Detection
                 LogSeverityLevel = OrtLoggingLevel.ORT_LOGGING_LEVEL_ERROR
             };
 
-            if (preferGpu && TryEnableCuda(sessionOptions))
+            if (!preferGpu)
+            {
+                Log("??? CPU kullanýlýyor (Optimize edilmiþ)");
+                return sessionOptions;
+            }
+
+            // Önce DirectML (Windows için - tüm GPU'larý destekler: NVIDIA, AMD, Intel)
+            if (TryEnableDirectML(sessionOptions))
+            {
+                Log("? GPU: DirectML (Windows) kullanýlýyor - Tüm GPU'lar destekleniyor");
+                return sessionOptions;
+            }
+
+            // DirectML yoksa CUDA dene (Sadece NVIDIA)
+            if (TryEnableCuda(sessionOptions))
             {
                 Log("?? GPU: CUDA (NVIDIA) kullanýlýyor");
                 return sessionOptions;
             }
 
-            Log("?? CPU kullanýlýyor (Optimize edilmiþ)");
+            Log("??? CPU kullanýlýyor (GPU bulunamadý)");
             return sessionOptions;
         }
 
         /// <summary>
-        /// CUDA provider'ý etkinleþtirmeyi dener
+        /// DirectML provider'ý etkinleþtirmeyi dener (Windows GPU - AMD, NVIDIA, Intel)
+        /// Python'daki 'DmlExecutionProvider' ile ayný
+        /// </summary>
+        private static bool TryEnableDirectML(SessionOptions options)
+        {
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                return false;
+
+            if (!IsDirectMLAvailable())
+                return false;
+
+            try
+            {
+                options.AppendExecutionProvider_DML(0);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log($"?? DirectML yüklenemedi: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// CUDA provider'ý etkinleþtirmeyi dener (NVIDIA GPU)
+        /// Python'daki 'CUDAExecutionProvider' ile ayný
         /// </summary>
         private static bool TryEnableCuda(SessionOptions options)
         {
@@ -61,8 +102,44 @@ namespace ALPR.Detection
         }
 
         /// <summary>
+        /// DirectML (Windows GPU) sistemde mevcut mu kontrol eder
+        /// </summary>
+        public static bool IsDirectMLAvailable() => _directMlAvailability.Value;
+
+        private static bool CheckDirectMLAvailability()
+        {
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                return false;
+
+            try
+            {
+                using var opts = new SessionOptions();
+                opts.AppendExecutionProvider_DML(0);
+                System.Diagnostics.Debug.WriteLine("? DirectML provider baþarýyla yüklendi!");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine("? DirectML provider yüklenemedi:");
+                System.Diagnostics.Debug.WriteLine($"   Hata: {ex.GetType().Name}");
+                System.Diagnostics.Debug.WriteLine($"   Mesaj: {ex.Message}");
+
+                if (ex.InnerException != null)
+                {
+                    System.Diagnostics.Debug.WriteLine($"   Inner Exception: {ex.InnerException.Message}");
+                }
+
+                if (ex.Message.Contains("DLL") || ex.Message.Contains("library"))
+                {
+                    System.Diagnostics.Debug.WriteLine("   ?? Çözüm: Microsoft.ML.OnnxRuntime.DirectML NuGet paketini yükleyin");
+                }
+
+                return false;
+            }
+        }
+
+        /// <summary>
         /// CUDA (NVIDIA GPU) sistemde mevcut mu kontrol eder
-        /// Thread-safe ve performanslý (lazy loading)
         /// </summary>
         public static bool IsGpuAvailable() => _cudaAvailability.Value;
 
@@ -70,28 +147,28 @@ namespace ALPR.Detection
         {
             try
             {
-                // CUDA_PATH environment variable kontrolü
-                var cudaPath = Environment.GetEnvironmentVariable("CUDA_PATH");
-                if (!string.IsNullOrEmpty(cudaPath) && Directory.Exists(cudaPath))
-                {
-                    return true;
-                }
-
-                // Windows'ta nvidia-smi kontrolü
-                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-                {
-                    var nvidiaSmiPath = Path.Combine(
-                        Environment.GetFolderPath(Environment.SpecialFolder.System),
-                        "..", "Program Files", "NVIDIA Corporation", "NVSMI", "nvidia-smi.exe"
-                    );
-
-                    return File.Exists(nvidiaSmiPath);
-                }
-
-                return false;
+                using var opts = new SessionOptions();
+                opts.AppendExecutionProvider_CUDA(0);
+                System.Diagnostics.Debug.WriteLine("? CUDA provider baþarýyla yüklendi!");
+                return true;
             }
-            catch
+            catch (Exception ex)
             {
+                System.Diagnostics.Debug.WriteLine("? CUDA provider yüklenemedi:");
+                System.Diagnostics.Debug.WriteLine($"   Hata: {ex.GetType().Name}");
+                System.Diagnostics.Debug.WriteLine($"   Mesaj: {ex.Message}");
+
+                if (ex.InnerException != null)
+                {
+                    System.Diagnostics.Debug.WriteLine($"   Inner Exception: {ex.InnerException.Message}");
+                }
+
+                if (ex.Message.Contains("DLL") || ex.Message.Contains("library"))
+                {
+                    System.Diagnostics.Debug.WriteLine("   ?? Çözüm: Microsoft.ML.OnnxRuntime.Gpu NuGet paketini yükleyin");
+                    System.Diagnostics.Debug.WriteLine("   ?? veya onnxruntime_providers_cuda.dll dosyasýný çalýþma dizinine kopyalayýn");
+                }
+
                 return false;
             }
         }
@@ -104,6 +181,11 @@ namespace ALPR.Detection
         public static string GetAvailableProviders()
         {
             var providers = new List<string>();
+
+            if (IsDirectMLAvailable())
+            {
+                providers.Add("DirectML (Windows GPU - AMD/NVIDIA/Intel)");
+            }
 
             if (IsGpuAvailable())
             {
@@ -123,12 +205,18 @@ namespace ALPR.Detection
             info.AppendLine($"Ýþlemci Sayýsý: {Environment.ProcessorCount}");
             info.AppendLine($"Optimal Thread: {GetOptimalThreadCount()}");
             
+            if (IsDirectMLAvailable())
+            {
+                info.AppendLine($"GPU DirectML: Evet (AMD/NVIDIA/Intel desteklenir)");
+            }
+            
             if (IsGpuAvailable())
             {
-                info.AppendLine($"GPU Kullanýlabilir: Evet (NVIDIA CUDA)");
+                info.AppendLine($"GPU CUDA: Evet (NVIDIA)");
                 info.AppendLine($"CUDA Path: {Environment.GetEnvironmentVariable("CUDA_PATH") ?? "Tespit edilemedi"}");
             }
-            else
+            
+            if (!IsDirectMLAvailable() && !IsGpuAvailable())
             {
                 info.AppendLine($"GPU Kullanýlabilir: Hayýr");
             }
