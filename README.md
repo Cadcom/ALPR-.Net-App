@@ -16,11 +16,10 @@ ALPR is a real-time license plate recognition application that detects and reads
 
 Main UI with detected plate (example):
 
-![Main Screenshot](ALPR/images/Ekran görüntüsü 2026-06-09 132935.png)
+![Plate Screenshot](ALPR/images/screen1.png)
 
 Example license plate detection (image mode):
 
-![Plate Screenshot](ALPR/images/screen1.png)
 ![Plate Screenshot](ALPR/images/videoCapture.png)
 
 ## Technologies 🛠️
