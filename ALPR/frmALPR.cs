@@ -960,7 +960,7 @@ namespace ALPR
                 {
                     Log("? Video açılamadı!");
                     return;
-                }
+                } 
 
                 _isVideoPlaying = true;
                 ResetFrameCounter();
