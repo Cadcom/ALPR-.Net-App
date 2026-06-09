@@ -18,7 +18,7 @@ Main UI with detected plate (example):
 
 ![Plate Screenshot](ALPR/images/screen1.png)
 
-Example license plate detection (image mode):
+Example license plate detection (live video):
 
 ![Plate Screenshot](ALPR/images/videoCapture.png)
 
