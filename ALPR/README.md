@@ -197,7 +197,7 @@ Commit message conventions:
 
 ## GPU & Execution Providers ⚠️
 
-The project includes code to attempt GPU execution providers. The `ExecutionProviderHelper` checks available providers and the app exposes a `GPU Kullan` checkbox in the UI. If GPU is not available the code will fall back to CPU. To enable GPU inference install a matching ONNX Runtime GPU package and the appropriate drivers (CUDA / DirectML / TensorRT) for your hardware.
+The project includes code to attempt GPU execution providers. The `ExecutionProviderHelper` checks available providers and the app exposes a `GPU Kullan` checkbox in the UI. If GPU is not available th[...]
 
 If you encounter provider errors, check the app log area (`Tespit Bilgileri`) which shows detected providers and helpful diagnostics.
 
