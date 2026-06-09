@@ -10,17 +10,12 @@ namespace ALPR
             btnSelectVideo = new Button();
             btnStartVideo = new Button();
             btnStopVideo = new Button();
-            btnModelComparison = new Button();
-            btnPaddleOCR = new Button();
-            btnTesseractOCR = new Button();
-            btnSelectPlateModel = new Button();
             btnBatchProcess = new Button();
             lblCurrentModel = new Label();
             pictureBoxImage = new PictureBox();
             txtLog = new RichTextBox();
             lblLog = new Label();
             chkEnableNMS = new CheckBox();
-            chkShowCharBoxes = new CheckBox();
             chkSavePlates = new CheckBox();
             chkUseGpu = new CheckBox();
             chkDebugMode = new CheckBox();
@@ -33,9 +28,12 @@ namespace ALPR
             lblFrameSkip = new Label();
             nudCharConfidence = new NumericUpDown();
             lblCharConfidence = new Label();
-            btnFastOCR = new Button();
-            chkPlakaOku = new CheckBox();
             chkDirectOcr = new CheckBox();
+            cmbPlateModelType = new ComboBox();
+            cbOcrModel = new ComboBox();
+            btnImageLabeling = new Button();
+            chkMultiModel = new CheckBox();
+            btnPause = new Button();
             ((System.ComponentModel.ISupportInitialize)pictureBoxImage).BeginInit();
             ((System.ComponentModel.ISupportInitialize)nudNMSThreshold).BeginInit();
             ((System.ComponentModel.ISupportInitialize)nudConfidenceThreshold).BeginInit();
@@ -71,7 +69,7 @@ namespace ALPR
             btnStartVideo.Location = new Point(167, 27);
             btnStartVideo.Margin = new Padding(3, 4, 3, 4);
             btnStartVideo.Name = "btnStartVideo";
-            btnStartVideo.Size = new Size(98, 47);
+            btnStartVideo.Size = new Size(98, 36);
             btnStartVideo.TabIndex = 2;
             btnStartVideo.Text = "Başlat";
             btnStartVideo.UseVisualStyleBackColor = true;
@@ -80,75 +78,23 @@ namespace ALPR
             // btnStopVideo
             // 
             btnStopVideo.Enabled = false;
-            btnStopVideo.Location = new Point(167, 77);
+            btnStopVideo.Location = new Point(167, 99);
             btnStopVideo.Margin = new Padding(3, 4, 3, 4);
             btnStopVideo.Name = "btnStopVideo";
-            btnStopVideo.Size = new Size(98, 47);
+            btnStopVideo.Size = new Size(98, 29);
             btnStopVideo.TabIndex = 3;
-            btnStopVideo.Text = "Durdur";
+            btnStopVideo.Text = "Bitir";
             btnStopVideo.UseVisualStyleBackColor = true;
             btnStopVideo.Click += btnStopVideo_Click;
-            // 
-            // btnModelComparison
-            // 
-            btnModelComparison.BackColor = Color.LightBlue;
-            btnModelComparison.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
-            btnModelComparison.Location = new Point(272, 27);
-            btnModelComparison.Margin = new Padding(3, 4, 3, 4);
-            btnModelComparison.Name = "btnModelComparison";
-            btnModelComparison.Size = new Size(171, 36);
-            btnModelComparison.TabIndex = 20;
-            btnModelComparison.Text = "Model Karşılaştır";
-            btnModelComparison.UseVisualStyleBackColor = false;
-            btnModelComparison.Click += btnModelComparison_Click;
-            // 
-            // btnPaddleOCR
-            // 
-            btnPaddleOCR.BackColor = Color.LightGreen;
-            btnPaddleOCR.Font = new Font("Segoe UI", 8F, FontStyle.Bold);
-            btnPaddleOCR.Location = new Point(272, 108);
-            btnPaddleOCR.Margin = new Padding(3, 4, 3, 4);
-            btnPaddleOCR.Name = "btnPaddleOCR";
-            btnPaddleOCR.Size = new Size(86, 31);
-            btnPaddleOCR.TabIndex = 23;
-            btnPaddleOCR.Text = "📝 PaddleOCR";
-            btnPaddleOCR.UseVisualStyleBackColor = false;
-            btnPaddleOCR.Click += btnPaddleOCR_Click;
-            // 
-            // btnTesseractOCR
-            // 
-            btnTesseractOCR.BackColor = Color.LightCyan;
-            btnTesseractOCR.Font = new Font("Segoe UI", 8F, FontStyle.Bold);
-            btnTesseractOCR.Location = new Point(363, 108);
-            btnTesseractOCR.Margin = new Padding(3, 4, 3, 4);
-            btnTesseractOCR.Name = "btnTesseractOCR";
-            btnTesseractOCR.Size = new Size(86, 31);
-            btnTesseractOCR.TabIndex = 26;
-            btnTesseractOCR.Text = "📝 Tesseract";
-            btnTesseractOCR.UseVisualStyleBackColor = false;
-            btnTesseractOCR.Click += btnTesseractOCR_Click;
-            // 
-            // btnSelectPlateModel
-            // 
-            btnSelectPlateModel.BackColor = Color.LightCoral;
-            btnSelectPlateModel.Font = new Font("Segoe UI", 8F, FontStyle.Bold);
-            btnSelectPlateModel.Location = new Point(272, 69);
-            btnSelectPlateModel.Margin = new Padding(3, 4, 3, 4);
-            btnSelectPlateModel.Name = "btnSelectPlateModel";
-            btnSelectPlateModel.Size = new Size(171, 31);
-            btnSelectPlateModel.TabIndex = 21;
-            btnSelectPlateModel.Text = "Plaka Modeli Seç";
-            btnSelectPlateModel.UseVisualStyleBackColor = false;
-            btnSelectPlateModel.Click += btnSelectPlateModel_Click;
             // 
             // btnBatchProcess
             // 
             btnBatchProcess.BackColor = Color.Gold;
             btnBatchProcess.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
-            btnBatchProcess.Location = new Point(1166, 27);
+            btnBatchProcess.Location = new Point(1166, 22);
             btnBatchProcess.Margin = new Padding(3, 4, 3, 4);
             btnBatchProcess.Name = "btnBatchProcess";
-            btnBatchProcess.Size = new Size(171, 47);
+            btnBatchProcess.Size = new Size(171, 41);
             btnBatchProcess.TabIndex = 25;
             btnBatchProcess.Text = "⚡ Toplu İşle";
             btnBatchProcess.UseVisualStyleBackColor = false;
@@ -159,7 +105,7 @@ namespace ALPR
             lblCurrentModel.AutoSize = true;
             lblCurrentModel.Font = new Font("Segoe UI", 8F, FontStyle.Bold);
             lblCurrentModel.ForeColor = Color.DarkBlue;
-            lblCurrentModel.Location = new Point(842, 111);
+            lblCurrentModel.Location = new Point(272, 104);
             lblCurrentModel.Name = "lblCurrentModel";
             lblCurrentModel.Size = new Size(128, 19);
             lblCurrentModel.TabIndex = 22;
@@ -208,7 +154,7 @@ namespace ALPR
             chkEnableNMS.AutoSize = true;
             chkEnableNMS.Checked = true;
             chkEnableNMS.CheckState = CheckState.Checked;
-            chkEnableNMS.Location = new Point(472, 112);
+            chkEnableNMS.Location = new Point(505, 73);
             chkEnableNMS.Margin = new Padding(3, 4, 3, 4);
             chkEnableNMS.Name = "chkEnableNMS";
             chkEnableNMS.Size = new Size(99, 24);
@@ -216,34 +162,21 @@ namespace ALPR
             chkEnableNMS.Text = "NMS Etkin";
             chkEnableNMS.UseVisualStyleBackColor = true;
             // 
-            // chkShowCharBoxes
-            // 
-            chkShowCharBoxes.AutoSize = true;
-            chkShowCharBoxes.Location = new Point(842, 75);
-            chkShowCharBoxes.Margin = new Padding(3, 4, 3, 4);
-            chkShowCharBoxes.Name = "chkShowCharBoxes";
-            chkShowCharBoxes.Size = new Size(141, 24);
-            chkShowCharBoxes.TabIndex = 5;
-            chkShowCharBoxes.Text = "Karakter Kutuları";
-            chkShowCharBoxes.UseVisualStyleBackColor = true;
-            // 
             // chkSavePlates
             // 
             chkSavePlates.AutoSize = true;
-            chkSavePlates.Location = new Point(472, 33);
+            chkSavePlates.Location = new Point(842, 104);
             chkSavePlates.Margin = new Padding(3, 4, 3, 4);
             chkSavePlates.Name = "chkSavePlates";
-            chkSavePlates.Size = new Size(137, 24);
+            chkSavePlates.Size = new Size(181, 24);
             chkSavePlates.TabIndex = 18;
-            chkSavePlates.Text = "Plakaları Kaydet";
+            chkSavePlates.Text = "Okunan Plakayı Kaydet";
             chkSavePlates.UseVisualStyleBackColor = true;
             // 
             // chkUseGpu
             // 
             chkUseGpu.AutoSize = true;
-            chkUseGpu.Checked = true;
-            chkUseGpu.CheckState = CheckState.Checked;
-            chkUseGpu.Location = new Point(472, 73);
+            chkUseGpu.Location = new Point(505, 39);
             chkUseGpu.Margin = new Padding(3, 4, 3, 4);
             chkUseGpu.Name = "chkUseGpu";
             chkUseGpu.Size = new Size(104, 24);
@@ -257,7 +190,7 @@ namespace ALPR
             chkDebugMode.AutoSize = true;
             chkDebugMode.Font = new Font("Segoe UI", 8F, FontStyle.Bold);
             chkDebugMode.ForeColor = Color.DarkRed;
-            chkDebugMode.Location = new Point(1026, 33);
+            chkDebugMode.Location = new Point(902, 70);
             chkDebugMode.Margin = new Padding(3, 4, 3, 4);
             chkDebugMode.Name = "chkDebugMode";
             chkDebugMode.Size = new Size(101, 23);
@@ -296,7 +229,7 @@ namespace ALPR
             nudConfidenceThreshold.Name = "nudConfidenceThreshold";
             nudConfidenceThreshold.Size = new Size(69, 27);
             nudConfidenceThreshold.TabIndex = 9;
-            nudConfidenceThreshold.Value = new decimal(new int[] { 6, 0, 0, 65536 });
+            nudConfidenceThreshold.Value = new decimal(new int[] { 11, 0, 0, 131072 });
             // 
             // lblConfidenceThreshold
             // 
@@ -357,57 +290,84 @@ namespace ALPR
             lblCharConfidence.TabIndex = 12;
             lblCharConfidence.Text = "Kar. Güven:";
             // 
-            // btnFastOCR
-            // 
-            btnFastOCR.BackColor = Color.LightCyan;
-            btnFastOCR.Font = new Font("Segoe UI", 8F, FontStyle.Bold);
-            btnFastOCR.Location = new Point(1166, 93);
-            btnFastOCR.Margin = new Padding(3, 4, 3, 4);
-            btnFastOCR.Name = "btnFastOCR";
-            btnFastOCR.Size = new Size(86, 31);
-            btnFastOCR.TabIndex = 27;
-            btnFastOCR.Text = "FastOCR";
-            btnFastOCR.UseVisualStyleBackColor = false;
-            btnFastOCR.Click += btnFastOCR_Click;
-            // 
-            // chkPlakaOku
-            // 
-            chkPlakaOku.AutoSize = true;
-            chkPlakaOku.Location = new Point(1166, 69);
-            chkPlakaOku.Name = "chkPlakaOku";
-            chkPlakaOku.Size = new Size(117, 24);
-            chkPlakaOku.TabIndex = 28;
-            chkPlakaOku.Text = "Plakaları Oku";
-            chkPlakaOku.UseVisualStyleBackColor = true;
-            // 
             // chkDirectOcr
             // 
             chkDirectOcr.AutoSize = true;
             chkDirectOcr.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
             chkDirectOcr.ForeColor = Color.DarkGreen;
-            chkDirectOcr.Location = new Point(1026, 73);
+            chkDirectOcr.Location = new Point(505, 104);
             chkDirectOcr.Name = "chkDirectOcr";
-            chkDirectOcr.Size = new Size(135, 24);
+            chkDirectOcr.Size = new Size(128, 24);
             chkDirectOcr.TabIndex = 29;
-            chkDirectOcr.Text = "Doğrudan OCR";
+            chkDirectOcr.Text = "Plakadan OCR";
             chkDirectOcr.UseVisualStyleBackColor = true;
+            // 
+            // cmbPlateModelType
+            // 
+            cmbPlateModelType.DropDownStyle = ComboBoxStyle.DropDownList;
+            cmbPlateModelType.FormattingEnabled = true;
+            cmbPlateModelType.Items.AddRange(new object[] { "V1 - LicencePlateDetection_Gpu", "V2 - plateReconitionV2" });
+            cmbPlateModelType.Location = new Point(271, 27);
+            cmbPlateModelType.Name = "cmbPlateModelType";
+            cmbPlateModelType.Size = new Size(171, 28);
+            cmbPlateModelType.TabIndex = 30;
+            cmbPlateModelType.SelectedIndexChanged += cmbPlateModelType_SelectedIndexChanged;
+            // 
+            // cbOcrModel
+            // 
+            cbOcrModel.DropDownStyle = ComboBoxStyle.DropDownList;
+            cbOcrModel.FormattingEnabled = true;
+            cbOcrModel.Items.AddRange(new object[] { "Model S", "Titan V8", "Parseq" });
+            cbOcrModel.Location = new Point(271, 65);
+            cbOcrModel.Name = "cbOcrModel";
+            cbOcrModel.Size = new Size(171, 28);
+            cbOcrModel.TabIndex = 31;
+            // 
+            // btnImageLabeling
+            // 
+            btnImageLabeling.Location = new Point(1166, 99);
+            btnImageLabeling.Name = "btnImageLabeling";
+            btnImageLabeling.Size = new Size(171, 29);
+            btnImageLabeling.TabIndex = 32;
+            btnImageLabeling.Text = "Resim Etiketleme";
+            btnImageLabeling.UseVisualStyleBackColor = true;
+            btnImageLabeling.Click += btnImageLabeling_Click;
+            // 
+            // chkMultiModel
+            // 
+            chkMultiModel.Location = new Point(1166, 64);
+            chkMultiModel.Name = "chkMultiModel";
+            chkMultiModel.Size = new Size(171, 32);
+            chkMultiModel.TabIndex = 33;
+            chkMultiModel.Text = "2 Model Kullan";
+            chkMultiModel.UseVisualStyleBackColor = true;
+            // 
+            // btnPause
+            // 
+            btnPause.Location = new Point(167, 65);
+            btnPause.Margin = new Padding(3, 4, 3, 4);
+            btnPause.Name = "btnPause";
+            btnPause.Size = new Size(98, 30);
+            btnPause.TabIndex = 34;
+            btnPause.Text = "Duraklat";
+            btnPause.UseVisualStyleBackColor = true;
+            btnPause.Click += btnPause_Click;
             // 
             // frmALPR
             // 
             AutoScaleDimensions = new SizeF(8F, 20F);
             AutoScaleMode = AutoScaleMode.Font;
             ClientSize = new Size(1360, 700);
+            Controls.Add(btnPause);
+            Controls.Add(chkMultiModel);
+            Controls.Add(btnImageLabeling);
+            Controls.Add(cbOcrModel);
             Controls.Add(chkDirectOcr);
-            Controls.Add(chkPlakaOku);
-            Controls.Add(btnFastOCR);
-            Controls.Add(btnTesseractOCR);
+            Controls.Add(cmbPlateModelType);
             Controls.Add(btnBatchProcess);
             Controls.Add(chkDebugMode);
             Controls.Add(lblFps);
             Controls.Add(lblCurrentModel);
-            Controls.Add(btnSelectPlateModel);
-            Controls.Add(btnPaddleOCR);
-            Controls.Add(btnModelComparison);
             Controls.Add(chkUseGpu);
             Controls.Add(chkSavePlates);
             Controls.Add(txtLog);
@@ -421,7 +381,6 @@ namespace ALPR
             Controls.Add(lblConfidenceThreshold);
             Controls.Add(nudNMSThreshold);
             Controls.Add(lblNMSThreshold);
-            Controls.Add(chkShowCharBoxes);
             Controls.Add(chkEnableNMS);
             Controls.Add(btnStopVideo);
             Controls.Add(btnStartVideo);
@@ -446,17 +405,12 @@ namespace ALPR
         private Button btnSelectVideo;
         private Button btnStartVideo;
         private Button btnStopVideo;
-        private Button btnModelComparison;
-        private Button btnPaddleOCR;
-        private Button btnTesseractOCR;
-        private Button btnSelectPlateModel;
         private Button btnBatchProcess; // YENİ buton
         private Label lblCurrentModel;
         private PictureBox pictureBoxImage;
         private RichTextBox txtLog;
         private Label lblLog;
         private CheckBox chkEnableNMS;
-        private CheckBox chkShowCharBoxes;
         private CheckBox chkSavePlates;
         private CheckBox chkUseGpu;
         private CheckBox chkDebugMode;
@@ -469,8 +423,11 @@ namespace ALPR
         private Label lblFrameSkip;
         private NumericUpDown nudCharConfidence;
         private Label lblCharConfidence;
-        private Button btnFastOCR;
-        private CheckBox chkPlakaOku;
         private CheckBox chkDirectOcr;
+        private ComboBox cmbPlateModelType;
+        private ComboBox cbOcrModel;
+        private Button btnImageLabeling;
+        private CheckBox chkMultiModel;
+        private Button btnPause;
     }
 }

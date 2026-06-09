@@ -1,4 +1,4 @@
-using Microsoft.ML.OnnxRuntime;
+ï»¿using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using OpenCvSharp;
 using OpenCvSharp.Dnn;
@@ -8,9 +8,9 @@ using System.Runtime.InteropServices;
 namespace ALPR.Detection
 {
     /// <summary>
-    /// ONNX modeli kullanarak plaka tespiti yapan sýnýf.
-    /// Thread-safe deðildir, her thread için ayrý instance oluþturulmalýdýr.
-    /// GPU desteði: CUDA (NVIDIA) ve DirectML (Windows)
+    /// ONNX modeli kullanarak plaka tespiti yapan sÄ±nÄ±f.
+    /// Thread-safe deÄŸildir, her thread iÃ§in ayrÄ± instance oluÅŸturulmalÄ±dÄ±r.
+    /// GPU desteÄŸi: CUDA (NVIDIA) ve DirectML (Windows)
     /// </summary>
     public sealed class LicensePlateDetector : IDisposable
     {
@@ -22,7 +22,7 @@ namespace ALPR.Detection
         private bool _disposed;
 
         /// <summary>
-        /// Plaka tespit modelini yükler. Otomatik olarak GPU kullanýr (varsa).
+        /// Plaka tespit modelini yÃ¼kler. Otomatik olarak GPU kullanÄ±r (varsa).
         /// </summary>
         /// <param name="modelPath">ONNX model dosya yolu</param>
         /// <param name="useGpu">GPU kullan (true: otomatik tespit, false: sadece CPU)</param>
@@ -32,9 +32,9 @@ namespace ALPR.Detection
                 throw new ArgumentNullException(nameof(modelPath));
 
             if (!File.Exists(modelPath))
-                throw new FileNotFoundException($"Model dosyasý bulunamadý: {modelPath}", modelPath);
+                throw new FileNotFoundException($"Model dosyasÄ± bulunamadÄ±: {modelPath}", modelPath);
 
-            // GPU/CPU SessionOptions oluþtur
+            // GPU/CPU SessionOptions oluÅŸtur
             var sessionOptions = ExecutionProviderHelper.CreateOptimizedSessionOptions(preferGpu: useGpu);
 
             _session = new InferenceSession(modelPath, sessionOptions);
@@ -42,13 +42,13 @@ namespace ALPR.Detection
         }
 
         /// <summary>
-        /// Görüntüde plaka tespiti yapar.
+        /// GÃ¶rÃ¼ntÃ¼de plaka tespiti yapar.
         /// </summary>
-        /// <param name="originalImage">Ýþlenecek görüntü</param>
-        /// <param name="confidenceThreshold">Minimum güven eþiði (0-1 arasý)</param>
+        /// <param name="originalImage">Ä°ÅŸlenecek gÃ¶rÃ¼ntÃ¼</param>
+        /// <param name="confidenceThreshold">Minimum gÃ¼ven eÅŸiÄŸi (0-1 arasÄ±)</param>
         /// <param name="enableNms">NMS (Non-Maximum Suppression) aktif mi</param>
-        /// <param name="nmsThreshold">NMS IoU eþiði</param>
-        /// <returns>Tespit edilen plakalar ve geçen süre (ms)</returns>
+        /// <param name="nmsThreshold">NMS IoU eÅŸiÄŸi</param>
+        /// <returns>Tespit edilen plakalar ve geÃ§en sÃ¼re (ms)</returns>
         public DetectionResult Detect(
             Bitmap originalImage,
             float confidenceThreshold,
@@ -146,7 +146,7 @@ namespace ALPR.Detection
             float w = output[0, 2, index];
             float h = output[0, 3, index];
 
-            // Merkez koordinattan köþe koordinatýna dönüþtür ve ölçekle
+            // Merkez koordinattan kÃ¶ÅŸe koordinatÄ±na dÃ¶nÃ¼ÅŸtÃ¼r ve Ã¶lÃ§ekle
             float x = (cx - w / 2f) * scaleX;
             float y = (cy - h / 2f) * scaleY;
             w *= scaleX;
@@ -168,7 +168,7 @@ namespace ALPR.Detection
             List<LicensePlateDetection> detections,
             float iouThreshold)
         {
-            // Güvene göre azalan sýrada sýrala
+            // GÃ¼vene gÃ¶re azalan sÄ±rada sÄ±rala
             var ordered = detections.OrderByDescending(d => d.Confidence).ToList();
             var kept = new List<LicensePlateDetection>(detections.Count);
 
@@ -178,7 +178,7 @@ namespace ALPR.Detection
                 kept.Add(current);
                 ordered.RemoveAt(0);
 
-                // Mevcut tespit ile örtüþen tespitleri kaldýr
+                // Mevcut tespit ile Ã¶rtÃ¼ÅŸen tespitleri kaldÄ±r
                 for (int i = ordered.Count - 1; i >= 0; i--)
                 {
                     if (CalculateIoU(current, ordered[i]) > iouThreshold)
@@ -192,7 +192,7 @@ namespace ALPR.Detection
         }
 
         /// <summary>
-        /// Ýki tespit arasýndaki IoU (Intersection over Union) deðerini hesaplar.
+        /// Ä°ki tespit arasÄ±ndaki IoU (Intersection over Union) deÄŸerini hesaplar.
         /// </summary>
         private static float CalculateIoU(LicensePlateDetection a, LicensePlateDetection b)
         {
@@ -240,6 +240,7 @@ namespace ALPR.Detection
         public float Confidence { get; set; }
         public string Class { get; set; } = string.Empty;
         public int ClassId { get; set; }
+        public string CountryName { get; set; } = string.Empty;
 
         public Rectangle GetRectangle() => new(X, Y, Width, Height);
     }

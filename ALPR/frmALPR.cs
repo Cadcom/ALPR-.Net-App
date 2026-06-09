@@ -2,31 +2,32 @@ using ALPR.Detection;
 using OpenCvSharp;
 using OpenCvSharp.Extensions;
 using System.Diagnostics;
+using System.Drawing.Imaging;
 
 namespace ALPR
 {
     public partial class frmALPR : Form
     {
-        private const string DefaultModelPathPlate = "models/LicencePlateDetection_Gpu.onnx";
+        private const string DefaultModelPathPlateV1 = "models/LicencePlateDetection_Gpu.onnx";
+        private const string DefaultModelPathPlateV2 = "models/plateRecognitionV2.onnx";
         private const string ModelPathChar = "models/cct_s_v1_global.onnx"; // Varsayılan S
-        private const string ModelPathCharXS = "models/cct_xs_v1_global_model.onnx"; // 2. sıra XS
-        private const string ModelPathTitan = "models/titan_armor_v3.onnx";
-        private const string ModelPathSentinel = "models/titan_armor_v6.onnx";
-        private const string ModelPathAbsolute = "models/titan_armor_v6_3_absolute.onnx";
         private const string ModelPathTitanV8 = "models/titan_armor_v8.onnx";
+        private const string ModelPathParseq = "models/parseq_fp16_fp32_sim.onnx";
         private const int MaxLogLines = 100;
         private const int LogTrimLines = 50;
 
-        private string _currentPlateModelPath = DefaultModelPathPlate;
-        private LicensePlateDetector? _plateDetector;
+        private enum PlateDetectionModelType { V1, V2 }
+        private PlateDetectionModelType _currentPlateModelType = PlateDetectionModelType.V1;
+        private string _currentPlateModelPath = DefaultModelPathPlateV1;
+        private LicensePlateDetector? _plateDetectorV1;
+        private YoloOnnxRunner.PlateRecognitionModel? _plateDetectorV2;
         private PlateCharDetector? _charDetector; // Varsayılan (S)
-        private PlateCharDetector? _charDetectorXS;
-        private TitanArmorDetector? _titanArmorDetector;
-        private TitanArmorSentinel? _sentinelDetector;
-        private TitanArmorV6Absolute? _absoluteDetector;
         private TitanArmorV8Detector? _titanV8Detector;
+        private ParseqDetector? _parseqDetector;
         private VideoCapture? _capture;
         private bool _isVideoPlaying;
+        private bool _isVideoPaused;          // ← ekle
+        private ManualResetEventSlim _pauseEvent = new(true); // ← ekle
         private string? _selectedVideoPath;
         private Thread? _videoThread;
         private int _frameCount;
@@ -39,37 +40,31 @@ namespace ALPR
         public frmALPR()
         {
             InitializeComponent();
+            this.Load += frmALPR_Load;
+        }
+
+        private bool _isInitializing;
+
+        private void frmALPR_Load(object? sender, EventArgs e)
+        {
             InitializeAppLogic();
         }
 
+        // Helper methods
+        private bool AreDetectorsReady() => IsPlateDetectorReady() && (_charDetector != null || _titanV8Detector != null || _parseqDetector != null);
+
+        private bool IsPlateDetectorReady() => _currentPlateModelType == PlateDetectionModelType.V2 ? _plateDetectorV2 != null : _plateDetectorV1 != null;
+
         private void InitializeAppLogic()
         {
+            _isInitializing = true;
             Directory.CreateDirectory(_outputFolder);
+            cbOcrModel.SelectedIndex = 0;
+            cmbPlateModelType.SelectedIndex = 0;
+            ApplyPlateModelTypeSelection(reloadDetectors: false);
             UpdateCurrentModelLabel();
-            SetupGpuAndModels();
-        }
 
-        private void UpdateCurrentModelLabel()
-        {
-            var modelName = Path.GetFileNameWithoutExtension(_currentPlateModelPath);
-            lblCurrentModel.Text = $"Model: {modelName}";
-
-            if (!File.Exists(_currentPlateModelPath))
-            {
-                lblCurrentModel.Text += " (Bulunamadı)";
-                lblCurrentModel.ForeColor = Color.Red;
-            }
-            else
-            {
-                lblCurrentModel.ForeColor = Color.DarkGreen;
-            }
-        }
-
-        private void SetupGpuAndModels()
-        {
             bool gpuAvailable = ExecutionProviderHelper.IsGpuAvailable();
-
-            // Checkbox'ı HER ZAMAN aktif bırak - kullanıcı deneme hakkına sahip olsun
             chkUseGpu.Enabled = true;
             chkUseGpu.Checked = gpuAvailable;
 
@@ -85,13 +80,34 @@ namespace ALPR
                 Log($"   CUDA_PATH: {Environment.GetEnvironmentVariable("CUDA_PATH") ?? "Ayarlanmamış"}");
             }
 
+            _isInitializing = false;
             LoadDetectors();
         }
+
+        private void UpdateCurrentModelLabel()
+        {
+            var modelName = Path.GetFileNameWithoutExtension(_currentPlateModelPath);
+            var modelTypeText = _currentPlateModelType == PlateDetectionModelType.V2 ? "V2" : "V1";
+            lblCurrentModel.Text = $"Model ({modelTypeText}): {modelName}";
+
+            if (!File.Exists(_currentPlateModelPath))
+            {
+                lblCurrentModel.Text += " (Bulunamadı)";
+                lblCurrentModel.ForeColor = Color.Red;
+            }
+            else
+            {
+                lblCurrentModel.ForeColor = Color.DarkGreen;
+            }
+        }
+
+        // SetupGpuAndModels is removed as it's merged into InitializeAppLogic
 
         private void LoadDetectors()
         {
             try
             {
+                ExecutionProviderHelper.Logger = (msg) => Log(msg);
                 Log($"🔧 Model dosyaları kontrol ediliyor...");
                 Log($"   Çalışma dizini: {Directory.GetCurrentDirectory()}");
                 Log($"   Plaka modeli: {_currentPlateModelPath} - Var mı: {File.Exists(_currentPlateModelPath)}");
@@ -100,36 +116,40 @@ namespace ALPR
                 if (!File.Exists(_currentPlateModelPath))
                 {
                     Log($"❌ Plaka modeli bulunamadı: {_currentPlateModelPath}");
-                    Log($"💡 Model dosyalarını seçin veya '{Path.Combine(Directory.GetCurrentDirectory(), "models")}' klasörüne koyun");
                     UpdateCurrentModelLabel();
                     return;
                 }
 
                 if (!File.Exists(ModelPathChar))
                 {
-                    Log($"❌ Karakter modeli bulunamadı: {ModelPathChar}");
-                    Log($"💡 Model dosyalarını '{Path.Combine(Directory.GetCurrentDirectory(), "models")}' klasörüne koyun");
+                    Log($"❌ Karakter S modeli bulunamadı: {ModelPathChar}");
                     return;
                 }
 
-                _plateDetector?.Dispose();
+                _plateDetectorV1?.Dispose();
+                _plateDetectorV2?.Dispose();
                 _charDetector?.Dispose();
-                _charDetectorXS?.Dispose();
-                _titanArmorDetector?.Dispose();
-                _sentinelDetector?.Dispose();
-                _absoluteDetector?.Dispose();
                 _titanV8Detector?.Dispose();
-                
+                _parseqDetector?.Dispose();
 
                 bool useGpu = chkUseGpu.Checked;
                 _detectorsLoadedWithGpu = useGpu;
 
-                Log($"🎯 GPU kullanımı: {(useGpu ? "İSTENİYOR" : "İSTENMİYOR")}");
+                Log($"🔧 Modeller yükleniyor (GPU: {(useGpu ? "Aktif" : "Pasif")})...");
 
+                // 1. Plaka Dedektörü (V1 veya V2)
                 try
                 {
-                    _plateDetector = new LicensePlateDetector(_currentPlateModelPath, useGpu);
-                    Log($"✅ Plaka dedektörü yüklendi");
+                    if (_currentPlateModelType == PlateDetectionModelType.V2)
+                    {
+                        _plateDetectorV2 = new YoloOnnxRunner.PlateRecognitionModel(_currentPlateModelPath, useGpu);
+                        Log($"✅ Plaka dedektörü (V2) yüklendi");
+                    }
+                    else
+                    {
+                        _plateDetectorV1 = new LicensePlateDetector(_currentPlateModelPath, useGpu);
+                        Log($"✅ Plaka dedektörü (V1) yüklendi");
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -137,118 +157,46 @@ namespace ALPR
                     if (useGpu)
                     {
                         Log($"⚠️ GPU ile yükleme başarısız. CPU ile deneniyor...");
-                        _plateDetector = new LicensePlateDetector(_currentPlateModelPath, false);
-                        Log($"✅ Plaka dedektörü CPU ile yüklendi");
-                    }
-                    else
-                    {
-                        throw;
+                        try
+                        {
+                            if (_currentPlateModelType == PlateDetectionModelType.V2)
+                            {
+                                _plateDetectorV2 = new YoloOnnxRunner.PlateRecognitionModel(_currentPlateModelPath, false);
+                                Log($"✅ Plaka dedektörü (V2) CPU ile yüklendi");
+                            }
+                            else
+                            {
+                                _plateDetectorV1 = new LicensePlateDetector(_currentPlateModelPath, false);
+                                Log($"✅ Plaka dedektörü (V1) CPU ile yüklendi");
+                            }
+                        }
+                        catch (Exception inner)
+                        {
+                            Log($"❌ Plaka dedektörü CPU ile de yüklenemedi: {inner.Message}");
+                        }
                     }
                 }
 
+                // 2. Karakter S Dedektörü
                 try
                 {
                     _charDetector = new PlateCharDetector(ModelPathChar, swapRB: false, useGpu);
-                    Log($"✅ Karakter modeli (S - Varsayılan) yüklendi");
                 }
                 catch (Exception ex)
                 {
-                    Log($"❌ Karakter modeli (S) yükleme hatası: {ex.Message}");
+                    Log($"❌ Karakter S yükleme hatası: {ex.Message}");
                     if (useGpu)
                     {
-                        Log($"⚠️ GPU ile Karakter (S) yükleme başarısız. CPU ile deneniyor...");
                         _charDetector = new PlateCharDetector(ModelPathChar, swapRB: false, false);
-                        Log($"✅ Karakter modeli (S - Varsayılan) CPU ile yüklendi");
                     }
                 }
 
+                // 3. Titan V8 Dedektörü
                 try
                 {
-                    _charDetectorXS = new PlateCharDetector(ModelPathCharXS, swapRB: false, useGpu);
-                    Log($"✅ Karakter modeli (XS) yüklendi");
-                }
-                catch (Exception ex)
-                {
-                    Log($"❌ Karakter modeli (XS) yükleme hatası: {ex.Message}");
-                    if (useGpu)
-                    {
-                        Log($"⚠️ GPU ile Karakter (XS) yükleme başarısız. CPU ile deneniyor...");
-                        _charDetectorXS = new PlateCharDetector(ModelPathCharXS, swapRB: false, false);
-                        Log($"✅ Karakter modeli (XS) CPU ile yüklendi");
-                    }
-                }
-
-                try
-                {
-                    if (File.Exists(ModelPathTitan))
-                    {
-                        _titanArmorDetector = new TitanArmorDetector(ModelPathTitan, useGpu);
-                        Log($"✅ Titan Armor dedektörü yüklendi");
-                    }
-                    else
-                    {
-                        Log($"⚠️ Titan Armor modeli bulunamadı: {ModelPathTitan}");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Log($"❌ Titan Armor dedektörü yükleme hatası: {ex.Message}");
-                    if (useGpu)
-                    {
-                        Log($"⚠️ GPU ile Titan Armor yükleme başarısız. CPU ile deneniyor...");
-                        _titanArmorDetector = new TitanArmorDetector(ModelPathTitan, false);
-                        Log($"✅ Titan Armor dedektörü CPU ile yüklendi");
-                    }
-                }
-
-                try
-                {
-                    Log($"🔍 Sentinel v6 kontrol ediliyor: {Path.GetFullPath(ModelPathSentinel)}");
-                    if (File.Exists(ModelPathSentinel))
-                    {
-                        _sentinelDetector = new TitanArmorSentinel(ModelPathSentinel, useGpu);
-                        Log($"✅ Sentinel v6 dedektörü yüklendi");
-                    }
-                    else
-                    {
-                        Log($"⚠️ Sentinel v6 dosyası BULUNAMADI: {ModelPathSentinel}");
-                        Log($"   Aranan tam yol: {Path.GetFullPath(ModelPathSentinel)}");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Log($"❌ Sentinel v6 yükleme hatası: {ex.Message}");
-                }
-
-                try
-                {
-                    Log($"🔍 Sentinel Absolute kontrol ediliyor: {Path.GetFullPath(ModelPathAbsolute)}");
-                    if (File.Exists(ModelPathAbsolute))
-                    {
-                        _absoluteDetector = new TitanArmorV6Absolute(ModelPathAbsolute, useGpu);
-                        Log($"✅ Sentinel Absolute dedektörü yüklendi");
-                    }
-                    else
-                    {
-                        Log($"⚠️ Sentinel Absolute dosyası BULUNAMADI: {ModelPathAbsolute}");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Log($"❌ Sentinel Absolute yükleme hatası: {ex.Message}");
-                }
-
-                try
-                {
-                    Log($"🔍 Titan V8 kontrol ediliyor: {Path.GetFullPath(ModelPathTitanV8)}");
                     if (File.Exists(ModelPathTitanV8))
                     {
-                        _titanV8Detector = new TitanArmorV8Detector(ModelPathTitanV8, useGpu);
-                        Log($"✅ Titan V8 dedektörü yüklendi");
-                    }
-                    else
-                    {
-                        Log($"⚠️ Titan V8 dosyası BULUNAMADI: {ModelPathTitanV8}");
+                        _titanV8Detector = new TitanArmorV8Detector(ModelPathTitanV8, useGpu: useGpu);
                     }
                 }
                 catch (Exception ex)
@@ -256,9 +204,35 @@ namespace ALPR
                     Log($"❌ Titan V8 yükleme hatası: {ex.Message}");
                 }
 
+                // 4. Parseq Dedektörü
+                try
+                {
+                    if (false && File.Exists(ModelPathParseq))
+                    {
+                        _parseqDetector = new ParseqDetector(ModelPathParseq, useGpu: useGpu, logCallback: null);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log($"❌ Parseq yükleme hatası: {ex.Message}");
+                    if (useGpu)
+                    {
+                        try
+                        {
+                            _parseqDetector = new ParseqDetector(ModelPathParseq, useGpu: false, logCallback: null);
+                        }
+                        catch (Exception cpuEx)
+                        {
+                            Log($"❌ Parseq CPU yükleme de başarısız: {cpuEx.Message}");
+                        }
+                    }
+                }
 
-                Log($"✅ Modeller yüklendi. GPU: {(useGpu ? "İSTENDİ" : "Pasif")}");
-                Log($"💡 Aktif plaka modeli: {Path.GetFileName(_currentPlateModelPath)}");
+                Log($"✅ Tüm modeller yüklendi (GPU: {(useGpu ? "Aktif" : "Pasif")})");
+
+                btnSelectImage.Enabled = false;
+                btnSelectVideo.Enabled = false;
+                btnBatchProcess.Enabled = false;
 
                 // Warm-up (Isınma Turu)
                 Task.Run(() =>
@@ -267,26 +241,39 @@ namespace ALPR
                     {
                         Log("🔥 Modeller ısıtılıyor (Warm-up)...");
                         var swWarm = Stopwatch.StartNew();
-                        
-                        // Boş bir bitmap ile ısıtma
-                        using var dummyBmp = new Bitmap(200, 60);
+
+                        using var dummyBmp = new Bitmap(200, 60, PixelFormat.Format24bppRgb);
                         using var gr = Graphics.FromImage(dummyBmp);
                         gr.Clear(Color.White);
                         using var dummyMat = BitmapConverter.ToMat(dummyBmp);
 
+                        //_plateDetectorV1?.Detect(dummyBmp, 0.5f, false, 0.45f);
+                        // Warm-up içinde TitanV8'i 3 kez çalıştır:
+                        using var titanDummy = new Mat(60, 200, MatType.CV_8UC3, Scalar.White);
+                        _titanV8Detector?.Predict(titanDummy);
+
+
+                        // PlateDetector da 3 kez:
+                        _plateDetectorV2?.Predict(dummyBmp);
                         _charDetector?.RunOnnxPlateRecognition(dummyBmp);
-                        _charDetectorXS?.RunOnnxPlateRecognition(dummyBmp);
-                        _titanArmorDetector?.Predict(dummyMat);
-                        _sentinelDetector?.Predict(dummyMat);
-                        _absoluteDetector?.PredictDetailed(dummyMat);
-                        _titanV8Detector?.Predict(dummyMat);
+
 
                         swWarm.Stop();
-                        Log($"✅ Warm-up tamamlandı ({swWarm.ElapsedMilliseconds}ms). İlk işlem artık hızlı olacak.");
+                        Log($"✅ Warm-up tamamlandı ({swWarm.ElapsedMilliseconds}ms).");
                     }
                     catch (Exception ex)
                     {
-                        Log($"⚠️ Warm-up sırasında hata (önemsiz): {ex.Message}");
+                        Log($"⚠️ Warm-up hatası (önemsiz): {ex.Message}");
+                    }
+                    finally
+                    {
+                        // Warm-up bitti, butonları aç
+                        this.Invoke(() =>
+                        {
+                            btnSelectImage.Enabled = true;
+                            btnSelectVideo.Enabled = true;
+                            btnBatchProcess.Enabled = true;
+                        });
                     }
                 });
 
@@ -359,7 +346,7 @@ namespace ALPR
             if (dialog.ShowDialog() == DialogResult.OK)
             {
                 // Ensure detectors reflect current GPU setting before running prediction
-                if (_plateDetector == null || _detectorsLoadedWithGpu != chkUseGpu.Checked)
+                if (!IsPlateDetectorReady() || _detectorsLoadedWithGpu != chkUseGpu.Checked)
                 {
                     Log("?? GPU ayarı değişikliği algılandı veya dedektörler yok. Modeller yeniden yükleniyor...");
                     LoadDetectors();
@@ -401,66 +388,164 @@ namespace ALPR
 
         private void chkUseGpu_CheckedChanged(object sender, EventArgs e)
         {
-            if (_plateDetector != null || _charDetector != null)
+            if (_isInitializing) return;
+
+            if (_plateDetectorV1 != null || _plateDetectorV2 != null || _charDetector != null)
             {
                 Log("?? GPU ayarı değişti. Modeller yeniden yükleniyor...");
                 LoadDetectors();
             }
         }
 
-        private void btnModelComparison_Click(object sender, EventArgs e)
+        private void cmbPlateModelType_SelectedIndexChanged(object sender, EventArgs e)
         {
-            try
+            if (_isInitializing) return;
+
+            ApplyPlateModelTypeSelection(reloadDetectors: true);
+        }
+
+        private void ApplyPlateModelTypeSelection(bool reloadDetectors)
+        {
+            _currentPlateModelType = cmbPlateModelType.SelectedIndex == 1 ? PlateDetectionModelType.V2 : PlateDetectionModelType.V1;
+
+            var defaultPath = _currentPlateModelType == PlateDetectionModelType.V2 ? DefaultModelPathPlateV2 : DefaultModelPathPlateV1;
+
+            if (string.IsNullOrWhiteSpace(_currentPlateModelPath) || _currentPlateModelPath == DefaultModelPathPlateV1 || _currentPlateModelPath == DefaultModelPathPlateV2)
             {
-                var modelComparisonForm = new frmModelComparison();
-                modelComparisonForm.Show();
-                Log("?? Model karşılaştırma ekranı açıldı.");
+                _currentPlateModelPath = defaultPath;
             }
-            catch (Exception ex)
+
+            UpdateCurrentModelLabel();
+
+            if (reloadDetectors && _plateDetectorV1 == null && _plateDetectorV2 == null)
             {
-                Log($"? Model karşılaştırma ekranı açılırken hata: {ex.Message}");
-                MessageBox.Show($"Model karşılaştırma ekranı açılırken hata oluştu:\n{ex.Message}", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                Log($"🔄 Plaka model tipi değiştirildi: {(_currentPlateModelType == PlateDetectionModelType.V2 ? "V2" : "V1")}");
+                LoadDetectors();
+            }
+            else if (reloadDetectors)
+            {
+                Log($"🔄 Plaka model tipi değiştirildi: {(_currentPlateModelType == PlateDetectionModelType.V2 ? "V2" : "V1")}");
+                LoadDetectors();
             }
         }
 
-        // PaddleOCR butonu
-        private void btnPaddleOCR_Click(object sender, EventArgs e)
+        // Yeni DetectPlates: V2 için YoloOnnxRunner dönüşünü DetectionResult'a çevirir, V1 için mevcut LicensePlateDetector kullanır
+        private DetectionResult DetectPlates(Bitmap bitmap)
         {
-            try
+            if (_currentPlateModelType == PlateDetectionModelType.V2)
             {
-                var paddleOCRForm = new frmPaddleOCR();
-                paddleOCRForm.Show();
-                Log("?? PaddleOCR platformu açıldı.");
+                using var input = Ensure24Bpp(bitmap);
+                var detections = _plateDetectorV2?.Predict(input) ?? new List<YoloOnnxRunner.DetectionResult>();
+
+                float confidenceThreshold = (float)nudConfidenceThreshold.Value;
+                bool enableNms = chkEnableNMS.Checked;
+                float nmsThreshold = (float)nudNMSThreshold.Value;
+
+                var thresholded = detections.Where(d => d.Confidence >= confidenceThreshold).ToList();
+
+                if (thresholded.Count == 0 && detections.Count > 0 && confidenceThreshold > 0.11f)
+                {
+                    thresholded = detections.Where(d => d.Confidence >= 0.11f).ToList();
+                    if (GetDebugModeValue())
+                        SafeLog($"🔁 V2 fallback eşiği devreye girdi: {confidenceThreshold:F2} -> 0.11", Color.DarkGoldenrod);
+                }
+
+                var plateCandidates = thresholded.Where(d => d.ClassId == 0).ToList();
+                var effective = plateCandidates.Count > 0 ? plateCandidates : thresholded;
+
+                var mapped = effective.Select(d => new LicensePlateDetection
+                {
+                    X = (int)Math.Round(d.Box.X),
+                    Y = (int)Math.Round(d.Box.Y),
+                    Width = (int)Math.Round(d.Box.Width),
+                    Height = (int)Math.Round(d.Box.Height),
+                    Confidence = d.Confidence,
+                    Class = string.IsNullOrWhiteSpace(d.CountryCode) ? "Licence_Plate" : d.CountryCode,
+                    ClassId = d.ClassId,
+                    CountryName = d.CountryName
+                }).Where(d => d.Width > 0 && d.Height > 0).ToList();
+
+                if (enableNms && mapped.Count > 1)
+                {
+                    mapped = ApplyNmsForMappedDetections(mapped, nmsThreshold);
+                }
+
+                return new DetectionResult(mapped, 0);
             }
-            catch (Exception ex)
-            {
-                Log($"? PaddleOCR platformu açılırken hata: {ex.Message}");
-                MessageBox.Show($"PaddleOCR platformu açılırken hata oluştu:\n{ex.Message}", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
+
+            return _plateDetectorV1!.Detect(bitmap, (float)nudConfidenceThreshold.Value, chkEnableNMS.Checked, (float)nudNMSThreshold.Value);
         }
 
-        // TesseractOCR butonu
-        private void btnTesseractOCR_Click(object sender, EventArgs e)
+        private static Bitmap Ensure24Bpp(Bitmap source)
+        {
+            if (source.PixelFormat == System.Drawing.Imaging.PixelFormat.Format24bppRgb)
+                return new Bitmap(source);
+
+            var converted = new Bitmap(source.Width, source.Height, System.Drawing.Imaging.PixelFormat.Format24bppRgb);
+            using var g = Graphics.FromImage(converted);
+            g.DrawImage(source, 0, 0, source.Width, source.Height);
+            return converted;
+        }
+
+        private static List<LicensePlateDetection> ApplyNmsForMappedDetections(List<LicensePlateDetection> detections, float iouThreshold)
+        {
+            var ordered = detections.OrderByDescending(d => d.Confidence).ToList();
+            var kept = new List<LicensePlateDetection>(ordered.Count);
+
+            while (ordered.Count > 0)
+            {
+                var current = ordered[0];
+                kept.Add(current);
+                ordered.RemoveAt(0);
+
+                for (int i = ordered.Count - 1; i >= 0; i--)
+                {
+                    if (CalculateIoU(current, ordered[i]) > iouThreshold)
+                    {
+                        ordered.RemoveAt(i);
+                    }
+                }
+            }
+
+            return kept;
+        }
+
+        private static float CalculateIoU(LicensePlateDetection a, LicensePlateDetection b)
+        {
+            int x1 = Math.Max(a.X, b.X);
+            int y1 = Math.Max(a.Y, b.Y);
+            int x2 = Math.Min(a.X + a.Width, b.X + b.Width);
+            int y2 = Math.Min(a.Y + a.Height, b.Y + b.Height);
+
+            int intersectionWidth = Math.Max(0, x2 - x1);
+            int intersectionHeight = Math.Max(0, y2 - y1);
+            int intersection = intersectionWidth * intersectionHeight;
+
+            int areaA = a.Width * a.Height;
+            int areaB = b.Width * b.Height;
+            int union = areaA + areaB - intersection;
+
+            return union > 0 ? (float)intersection / union : 0f;
+        }
+
+        private void btnImageLabeling_Click(object sender, EventArgs e)
         {
             try
             {
-                var ImageToTextForm = new ImageLabeling();
-                ImageToTextForm.Show();
-                //var tesseractOCRForm = new frmTesseractOCR();
-                //tesseractOCRForm.Show();
-                //Log("?? Tesseract OCR platformu açıldı.");
+                var frmLabeling = new ImageLabeling();
+                frmLabeling.Show();
+                Log("🔧 Resim Etiketleme ekranı açıldı.");
             }
             catch (Exception ex)
             {
-                Log($"? Tesseract OCR platformu açılırken hata: {ex.Message}");
-                MessageBox.Show($"Tesseract OCR platformu açılırken hata oluştu:\n{ex.Message}", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                Log($"❌ Resim Etiketleme ekranı açılırken hata: {ex.Message}");
             }
         }
 
         private void btnBatchProcess_Click(object sender, EventArgs e)
         {
             // If detectors were loaded with a different GPU setting, reload now so batch uses current choice
-            if (_plateDetector == null || _detectorsLoadedWithGpu != chkUseGpu.Checked)
+            if (!IsPlateDetectorReady() || _detectorsLoadedWithGpu != chkUseGpu.Checked)
             {
                 Log("?? GPU ayarı değişikliği algılandı veya dedektörler yok. Modeller yeniden yükleniyor...");
                 LoadDetectors();
@@ -482,7 +567,7 @@ namespace ALPR
 
             if (folderDialog.ShowDialog() == DialogResult.OK)
             {
-                ProcessBatchImages(folderDialog.SelectedPath, chkPlakaOku.Checked);
+                ProcessBatchImages(folderDialog.SelectedPath, true);
             }
         }
 
@@ -509,6 +594,8 @@ namespace ALPR
                 // Progress için değişkenler
                 int processedCount = 0;
                 int totalPlatesFound = 0;
+                int v8CorrectCount = 0;
+                int cctCorrectCount = 0;
                 var stopwatch = Stopwatch.StartNew();
 
                 // Her resim için işlem yap
@@ -522,11 +609,7 @@ namespace ALPR
                         Log($"?? [{processedCount}/{imageFiles.Length}] İşleniyor: {fileName}");
 
                         using var bitmap = new Bitmap(imagePath);
-                        var plateResult = _plateDetector!.Detect(
-                            bitmap,
-                            (float)nudConfidenceThreshold.Value,
-                            chkEnableNMS.Checked,
-                            (float)nudNMSThreshold.Value);
+                        var plateResult = DetectPlates(bitmap);
 
                         if (plateResult.Detections.Count == 0)
                         {
@@ -540,7 +623,9 @@ namespace ALPR
                             totalPlatesFound++;
 
                             // Plaka resmini kaydet
-                            SavePlateImageBatch(bitmap, plate, fileName, totalPlatesFound, doOcr);
+                            var (v8C, cctC) = SavePlateImageBatch(bitmap, plate, fileName, totalPlatesFound, doOcr);
+                            if (v8C) v8CorrectCount++;
+                            if (cctC) cctCorrectCount++;
 
                             detectedPlates.Add($"{plate.Confidence:P1}");
                         }
@@ -565,15 +650,33 @@ namespace ALPR
 
                 Log($"?? Toplu işleme tamamlandı!");
                 Log($"?? Özet: {processedCount} resim işlendi, {totalPlatesFound} plaka bulundu");
+                if (doOcr)
+                {
+                    Log($"?? Doğruluk Özeti:");
+                    Log($"   - Titan V8: {v8CorrectCount} / {totalPlatesFound} doğru bilindi.");
+                    if (chkMultiModel.Checked)
+                    {
+                        Log($"   - Model S (CCT): {cctCorrectCount} / {totalPlatesFound} doğru bilindi.");
+                    }
+                }
                 Log($"?? Toplam süre: {stopwatch.Elapsed.TotalSeconds:F2} saniye");
                 Log($"?? Ortalama hız: {(processedCount / stopwatch.Elapsed.TotalSeconds):F2} resim/saniye");
 
+                string reportMsg = $"Toplu işleme tamamlandı!\n\n" +
+                                   $"İşlenen resim: {processedCount}\n" +
+                                   $"Bulunan plaka: {totalPlatesFound}\n" +
+                                   $"Süre: {stopwatch.Elapsed.TotalSeconds:F2} saniye\n\n";
+
+                if (doOcr)
+                {
+                    reportMsg += $"Titan V8 Doğru: {v8CorrectCount}\n";
+                    if (chkMultiModel.Checked) reportMsg += $"Model S Doğru: {cctCorrectCount}\n\n";
+                }
+
+                reportMsg += $"Plaka resimleri '{_outputFolder}' klasörüne kaydedildi.";
+
                 MessageBox.Show(
-                    $"Toplu işleme tamamlandı!\n\n" +
-                    $"İşlenen resim: {processedCount}\n" +
-                    $"Bulunan plaka: {totalPlatesFound}\n" +
-                    $"Süre: {stopwatch.Elapsed.TotalSeconds:F2} saniye\n\n" +
-                    $"Plaka resimleri '{_outputFolder}' klasörüne kaydedildi.",
+                    reportMsg,
                     "Toplu İşleme Tamamlandı",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Information);
@@ -585,38 +688,97 @@ namespace ALPR
             }
         }
 
-        private void SavePlateImageBatch(Bitmap originalBitmap, LicensePlateDetection plate, string originalFileName, int plateIndex, bool doOcr)
+        private (bool v8Correct, bool cctCorrect) SavePlateImageBatch(Bitmap originalBitmap, LicensePlateDetection plate, string originalFileName, int plateIndex, bool doOcr)
         {
+            bool v8ResultCorrect = false;
+            bool cctResultCorrect = false;
+
             try
             {
                 var plateRect = plate.GetRectangle();
                 plateRect.Intersect(new Rectangle(0, 0, originalBitmap.Width, originalBitmap.Height));
 
                 if (plateRect.Width <= 0 || plateRect.Height <= 0)
-                    return;
+                    return (false, false);
 
                 using var plateBitmap = originalBitmap.Clone(plateRect, originalBitmap.PixelFormat);
 
                 string filename;
+                string targetFolder = _outputFolder;
 
                 if (doOcr)
                 {
-                    // OCR ile plaka okuma (mevcut aktif model kullanılır)
-                    // Batch işleme sırasında Titan V8 ile OCR yapılması istendi -> Titan V8 metodunu kullan
-                    var plateText = ProcessPlateCharactersTitanV8Only(originalBitmap, plate); // Sadece Titan V8 modeli çalıştırılır
-                    
-                    if (string.IsNullOrWhiteSpace(plateText))
+                    if (chkMultiModel.Checked)
                     {
-                        // Okunamadıysa fallback, timestamp kullan
-                        var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-                        var safeOriginalName = string.Concat(Path.GetFileNameWithoutExtension(originalFileName).Where(c => !Path.GetInvalidFileNameChars().Contains(c)));
-                        filename = $"{timestamp}_plate_{plateIndex:D4}_{safeOriginalName}_{plate.Confidence:F3}.jpg";
+                        var plateTextV8 = ProcessPlateCharactersTitanV8Only(originalBitmap, plate);
+                        string plateTextCCT = string.Empty;
+                        if (_charDetector != null)
+                        {
+                            plateTextCCT = _charDetector.RunOnnxPlateRecognition(plateBitmap).Detection ?? string.Empty;
+                        }
+
+                        string baseFileName = Path.GetFileNameWithoutExtension(originalFileName);
+                        v8ResultCorrect = !string.IsNullOrWhiteSpace(plateTextV8) && baseFileName.Contains(plateTextV8, StringComparison.OrdinalIgnoreCase);
+                        cctResultCorrect = !string.IsNullOrWhiteSpace(plateTextCCT) && baseFileName.Contains(plateTextCCT, StringComparison.OrdinalIgnoreCase);
+
+                        if (string.Equals(plateTextV8, plateTextCCT, StringComparison.OrdinalIgnoreCase))
+                        {
+                            var plateText = plateTextV8;
+                            if (string.IsNullOrWhiteSpace(plateText))
+                            {
+                                var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                                var safeOriginalName = string.Concat(Path.GetFileNameWithoutExtension(originalFileName).Where(c => !Path.GetInvalidFileNameChars().Contains(c)));
+                                filename = $"{timestamp}_plate_{plateIndex:D4}_{safeOriginalName}_{plate.Confidence:F3}.jpg";
+                            }
+                            else
+                            {
+                                var safePlateText = string.Concat(plateText.Where(c => !Path.GetInvalidFileNameChars().Contains(c)));
+                                filename = $"{safePlateText}.jpg";
+                            }
+                        }
+                        else
+                        {
+                            if (v8ResultCorrect || cctResultCorrect)
+                            {
+                                string correctText = v8ResultCorrect ? plateTextV8 : plateTextCCT;
+                                string safePlateText = string.Concat(correctText.Where(c => !Path.GetInvalidFileNameChars().Contains(c)));
+                                filename = $"{safePlateText}.jpg";
+                                Log($"✅ MultiModel Farklı Ama Dosya Adıyla Eşleşti: '{correctText}' Doğru Kabul Edildi.", Color.DarkGreen);
+                            }
+                            else
+                            {
+                                targetFolder = Path.Combine(_outputFolder, "NotSure");
+                                if (!Directory.Exists(targetFolder))
+                                {
+                                    Directory.CreateDirectory(targetFolder);
+                                }
+
+                                string safeV8 = string.IsNullOrWhiteSpace(plateTextV8) ? "BOS" : string.Concat(plateTextV8.Where(c => !Path.GetInvalidFileNameChars().Contains(c)));
+                                string safeCCT = string.IsNullOrWhiteSpace(plateTextCCT) ? "BOS" : string.Concat(plateTextCCT.Where(c => !Path.GetInvalidFileNameChars().Contains(c)));
+
+                                filename = $"{safeV8}_V8_{safeCCT}_CCT.jpg";
+                                Log($"⚠️ MultiModel Farklı: V8='{plateTextV8}', S(CCT)='{plateTextCCT}' - NotSure klasörüne kaydediliyor.", Color.DarkGoldenrod);
+                            }
+                        }
                     }
                     else
                     {
-                        // Plaka metni geçerli
-                        var safePlateText = string.Concat(plateText.Where(c => !Path.GetInvalidFileNameChars().Contains(c)));
-                        filename = $"{safePlateText}.jpg";
+                        // Sadece Titan V8
+                        var plateText = ProcessPlateCharactersTitanV8Only(originalBitmap, plate);
+                        string baseFileName = Path.GetFileNameWithoutExtension(originalFileName);
+                        v8ResultCorrect = !string.IsNullOrWhiteSpace(plateText) && baseFileName.Contains(plateText, StringComparison.OrdinalIgnoreCase);
+
+                        if (string.IsNullOrWhiteSpace(plateText))
+                        {
+                            var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                            var safeOriginalName = string.Concat(Path.GetFileNameWithoutExtension(originalFileName).Where(c => !Path.GetInvalidFileNameChars().Contains(c)));
+                            filename = $"{timestamp}_plate_{plateIndex:D4}_{safeOriginalName}_{plate.Confidence:F3}.jpg";
+                        }
+                        else
+                        {
+                            var safePlateText = string.Concat(plateText.Where(c => !Path.GetInvalidFileNameChars().Contains(c)));
+                            filename = $"{safePlateText}.jpg";
+                        }
                     }
                 }
                 else
@@ -627,81 +789,81 @@ namespace ALPR
                     filename = $"{timestamp}_plate_{plateIndex:D4}_{safeOriginalName}_{plate.Confidence:F3}.jpg";
                 }
 
-                var fullPath = Path.Combine(_outputFolder, filename);
+                var fullPath = Path.Combine(targetFolder, filename);
 
                 // Çakışma kontrolü ve yönetimi
                 if (File.Exists(fullPath))
                 {
-                    bool overwrite = false;
-                    try 
-                    {
-                        // Dosya boyutlarını karşılaştır (basit içerik kontrolü varsayımı)
-                        // Not: Bitmap kaydetmeden önce boyutunu tam bilemeyiz, bu yüzden mevcut dosyayla karşılaştırmak zor.
-                        // Ancak kullanıcı kuralı: "Aynı boyuttaysa üzerine yazsın. Boyutları farklı ise indexlesin"
-                        // Burada mantıksal bir sorun var: Henüz kaydetmediğimiz resmin boyutunu (byte olarak) bilmiyoruz.
-                        // Kaydedip sonra kontrol etmek gerekebilir veya geçici bir dosyaya kaydedip karşılaştırabiliriz.
-                        // Veya sadece isim çakışmasına odaklanıp, eğer dosya varsa indexleyelim (farklı resimse).
-                        // Fakat kullanıcı "aynı boyuttaysa üzerine yazsın" dedi. 
-                        
-                        // Strateji: Geçici belleğe kaydet, boyutunu al.
-                        using (var ms = new MemoryStream())
-                        {
-                            plateBitmap.Save(ms, System.Drawing.Imaging.ImageFormat.Jpeg);
-                            long newSize = ms.Length;
-                            
-                            var existingInfo = new FileInfo(fullPath);
-                            if (existingInfo.Length == newSize)
-                            {
-                                overwrite = true;
-                            }
-                        }
-                    }
-                    catch 
-                    {
-                        // Hata durumunda güvenli yol: indexle
-                        overwrite = false;
-                    }
+                    //bool overwrite = false;
+                    //try
+                    //{
+                    //    // Dosya boyutlarını karşılaştır (basit içerik kontrolü varsayımı)
+                    //    // Not: Bitmap kaydetmeden önce boyutunu tam bilemeyiz, bu yüzden mevcut dosyayla karşılaştırmak zor.
+                    //    // Ancak kullanıcı kuralı: "Aynı boyuttaysa üzerine yazsın. Boyutları farklı ise indexlesin"
+                    //    // Burada mantıksal bir sorun var: Henüz kaydetmediğimiz resmin boyutunu (byte olarak) bilmiyoruz.
+                    //    // Kaydedip sonra kontrol etmek gerekebilir veya geçici bir dosyaya kaydedip karşılaştırabiliriz.
+                    //    // Veya sadece isim çakışmasına odaklanıp, eğer dosya varsa indexleyelim (farklı resimse).
+                    //    // Fakat kullanıcı "aynı boyuttaysa üzerine yazsın" dedi. 
 
-                    if (!overwrite)
+                    //    // Strateji: Geçici belleğe kaydet, boyutunu al.
+                    //    using (var ms = new MemoryStream())
+                    //    {
+                    //        plateBitmap.Save(ms, System.Drawing.Imaging.ImageFormat.Jpeg);
+                    //        long newSize = ms.Length;
+
+                    //        var existingInfo = new FileInfo(fullPath);
+                    //        if (existingInfo.Length == newSize)
+                    //        {
+                    //            overwrite = true;
+                    //        }
+                    //    }
+                    //}
+                    //catch
+                    //{
+                    //    // Hata durumunda güvenli yol: indexle
+                    //    overwrite = false;
+                    //}
+
+                    //if (!overwrite)
+                    //{
+                    // İndeksle: xxxxxxx_02.jpg
+                    string nameWithoutExt = Path.GetFileNameWithoutExtension(filename);
+                    string ext = Path.GetExtension(filename);
+                    int counter = 2;
+
+                    do
                     {
-                        // İndeksle: xxxxxxx_02.jpg
-                        string nameWithoutExt = Path.GetFileNameWithoutExtension(filename);
-                        string ext = Path.GetExtension(filename);
-                        int counter = 2;
-                        
-                        do
+                        var newName = $"{nameWithoutExt}_{counter:D2}{ext}";
+                        fullPath = Path.Combine(targetFolder, newName);
+
+                        // Yeni isim de var mı? Varsa ve boyutu farklıysa counter artır, boyutu aynıysa üzerine yaz
+                        if (File.Exists(fullPath))
                         {
-                            var newName = $"{nameWithoutExt}_{counter:D2}{ext}";
-                            fullPath = Path.Combine(_outputFolder, newName);
-                            
-                            // Yeni isim de var mı? Varsa ve boyutu farklıysa counter artır, boyutu aynıysa üzerine yaz
-                            if (File.Exists(fullPath))
+                            // Tekrar boyut kontrolü
+                            try
                             {
-                                // Tekrar boyut kontrolü
-                                try
+                                using (var ms = new MemoryStream())
                                 {
-                                     using (var ms = new MemoryStream())
+                                    plateBitmap.Save(ms, System.Drawing.Imaging.ImageFormat.Jpeg); // Tekrar save maliyetli ama güvenli
+                                    long newSize = ms.Length;
+                                    if (new FileInfo(fullPath).Length == newSize)
                                     {
-                                        plateBitmap.Save(ms, System.Drawing.Imaging.ImageFormat.Jpeg); // Tekrar save maliyetli ama güvenli
-                                        long newSize = ms.Length;
-                                        if (new FileInfo(fullPath).Length == newSize)
-                                        {
-                                            // Aynı boyut, bu dosyanın üzerine yaz
-                                            break; 
-                                        }
+                                        // Aynı boyut, bu dosyanın üzerine yaz
+                                        break;
                                     }
                                 }
-                                catch {}
-                                counter++;
                             }
-                            else
-                            {
-                                // Dosya yok, buraya yaz
-                                break;
-                            }
+                            catch { }
+                            counter++;
+                        }
+                        else
+                        {
+                            // Dosya yok, buraya yaz
+                            break;
+                        }
 
-                        } while (true);
-                    }
+                    } while (true);
+                    //}
                 }
 
                 plateBitmap.Save(fullPath, System.Drawing.Imaging.ImageFormat.Jpeg);
@@ -711,6 +873,8 @@ namespace ALPR
             {
                 Log($"?? Plaka kaydetme hatası: {ex.Message}");
             }
+
+            return (v8ResultCorrect, cctResultCorrect);
         }
 
         private Bitmap DrawPlatesOnImage(Bitmap originalBitmap, IReadOnlyList<LicensePlateDetection> plates)
@@ -841,8 +1005,10 @@ namespace ALPR
         private void ProcessVideoFrames()
         {
             int frameSkip = 0;
-            int targetFps = 30;
-            int frameDelay = 1000 / targetFps;
+
+            double videoFps = _capture?.Fps ?? 30.0;
+            if (videoFps <= 0 || videoFps > 120) videoFps = 30.0;
+            int frameDelay = (int)(1000.0 / videoFps);
 
             try
             {
@@ -850,6 +1016,8 @@ namespace ALPR
 
                 while (_isVideoPlaying && _capture != null && !_isDisposed)
                 {
+                    _pauseEvent.Wait(); // pause'da burada bekler, resume'da devam eder
+
                     var frameStart = DateTime.Now;
 
                     if (!_capture.Read(frame) || frame.Empty())
@@ -864,7 +1032,7 @@ namespace ALPR
                     frameSkip = 0;
 
                     using var bitmap = BitmapConverter.ToBitmap(frame);
-                    using var result = ProcessFrame(bitmap);
+                    var result = ProcessFrame(bitmap);
 
                     if (result != null)
                     {
@@ -874,13 +1042,14 @@ namespace ALPR
                     UpdateFrameCounter();
 
                     var elapsed = (int)(DateTime.Now - frameStart).TotalMilliseconds;
-                    var sleepTime = Math.Max(1, frameDelay - elapsed);
+                    int effectiveDelay = frameDelay * (skipValue + 1);
+                    var sleepTime = Math.Max(1, effectiveDelay - elapsed);
                     Thread.Sleep(sleepTime);
                 }
             }
             catch (Exception ex)
             {
-                SafeLog($"? Video işleme hatası: {ex.Message}");
+                SafeLog($"❌ Video işleme hatası: {ex.Message}");
             }
             finally
             {
@@ -923,11 +1092,7 @@ namespace ALPR
                     return directResult;
                 }
 
-                var plateResult = _plateDetector!.Detect(
-                    originalBitmap,
-                    (float)nudConfidenceThreshold.Value,
-                    chkEnableNMS.Checked,
-                    (float)nudNMSThreshold.Value);
+                var plateResult = DetectPlates(originalBitmap);
 
                 sw.Stop();
 
@@ -976,11 +1141,17 @@ namespace ALPR
             }
         }
 
+        private int GetOcrModelSelection()
+        {
+            if (InvokeRequired)
+            {
+                return (int)Invoke(new Func<int>(GetOcrModelSelection));
+            }
+            return cbOcrModel.SelectedIndex >= 0 ? cbOcrModel.SelectedIndex : 0;
+        }
+
         private string ProcessPlateCharacters(Bitmap originalBitmap, LicensePlateDetection plate)
         {
-            if (_charDetector == null)
-                return string.Empty;
-
             try
             {
                 var plateRect = plate.GetRectangle();
@@ -992,68 +1163,57 @@ namespace ALPR
                 using var plateBitmap = originalBitmap.Clone(plateRect, originalBitmap.PixelFormat);
                 using var plateMat = BitmapConverter.ToMat(plateBitmap);
 
-                // Süre ölçümleri için Stopwatch
+                int selectedOcrModel = GetOcrModelSelection();
                 var swModel = new Stopwatch();
 
+                // Video modunda: Sadece seçilen model çalışsın (Maksimum FPS için)
+                if (_isVideoPlaying)
+                {
+                    if (selectedOcrModel == 2 && _parseqDetector != null)
+                    {
+                        swModel.Restart();
+                        var parseqRes = _parseqDetector.RunParseqOcr(plateBitmap);
+                        swModel.Stop();
+                        SafeLog($"?? OCR (Parseq): '{parseqRes.Text}' ({swModel.ElapsedMilliseconds}ms)");
+                        return parseqRes.Text;
+                    }
+                    else if (selectedOcrModel == 1 && _titanV8Detector != null)
+                    {
+                        swModel.Restart();
+                        var v8Res = _titanV8Detector.Predict(plateMat);
+                        swModel.Stop();
+                        string v8Text = v8Res?.Text ?? string.Empty;
+                        SafeLog($"?? OCR (Titan V8): '{v8Text}' ({swModel.ElapsedMilliseconds}ms)");
+                        return v8Text;
+                    }
+                    else
+                    {
+                        swModel.Restart();
+                        var sRes = _charDetector?.RunOnnxPlateRecognition(plateBitmap).Detection ?? string.Empty;
+                        swModel.Stop();
+                        SafeLog($"?? OCR (Model S): '{sRes}' ({swModel.ElapsedMilliseconds}ms)");
+                        return sRes;
+                    }
+                }
+
+                // Tekil resim modunda: Karşılaştırma için tüm modeller çalıştırılır ve detaylı loglanır
                 swModel.Restart();
                 var sResult = _charDetector?.RunOnnxPlateRecognition(plateBitmap).Detection ?? string.Empty;
                 swModel.Stop();
                 long sTime = swModel.ElapsedMilliseconds;
-
-                // Eğer video oynatılıyorsa SADECE Model S çalışsın ve dönsün (Performans için)
-                if (_isVideoPlaying)
-                {
-                    SafeLog($"?? OCR: '{sResult}' ({sTime}ms)");
-                    return sResult;
-                }
-
-                swModel.Restart();
-                var xsResult = _charDetectorXS?.RunOnnxPlateRecognition(plateBitmap).Detection ?? string.Empty;
-                swModel.Stop();
-                long xsTime = swModel.ElapsedMilliseconds;
-
-                swModel.Restart();
-                var v3Result = _titanArmorDetector?.Predict(plateMat) ?? string.Empty;
-                swModel.Stop();
-                long v3Time = swModel.ElapsedMilliseconds;
-
-                swModel.Restart();
-                var sentinelResult = _sentinelDetector?.Predict(plateMat);
-                swModel.Stop();
-                long sentinelTime = swModel.ElapsedMilliseconds;
-
-                swModel.Restart();
-                var absoluteResult = _absoluteDetector?.PredictDetailed(plateMat);
-                swModel.Stop();
-                long absTime = swModel.ElapsedMilliseconds;
 
                 swModel.Restart();
                 var v8Result = _titanV8Detector?.Predict(plateMat);
                 swModel.Stop();
                 long v8Time = swModel.ElapsedMilliseconds;
 
-                SafeLog($"?? OCR SONUÇLARI:");
-                SafeLog($"   - Model S".PadRight(30) + $": '{(string.IsNullOrEmpty(sResult) ? "[Yüklenmedi]" : sResult)}' ({sTime}ms)");
-                SafeLog($"   - Model XS".PadRight(30) + $": '{(string.IsNullOrEmpty(xsResult) ? "[Yüklenmedi]" : xsResult)}' ({xsTime}ms)");
-                SafeLog($"   - Titan v3".PadRight(30) + $": '{(string.IsNullOrEmpty(v3Result) ? "[Boş]" : v3Result)}' ({v3Time}ms)");
-                
-                if (sentinelResult != null)
-                {
-                    LogSentinelResult(sentinelResult, sentinelTime);
-                }
-                else
-                {
-                    SafeLog($"   - Sentinel v6: [Dedektör Yüklenemedi]", Color.Gray);
-                }
+                swModel.Restart();
+                var parseqResult = _parseqDetector?.RunParseqOcr(plateBitmap);
+                swModel.Stop();
+                long parseqTime = swModel.ElapsedMilliseconds;
 
-                if (absoluteResult != null)
-                {
-                    LogAbsoluteResult(absoluteResult, absTime);
-                }
-                else
-                {
-                    SafeLog($"   - Abs v6.3   : [Dedektör Yüklenemedi]", Color.Gray);
-                }
+                SafeLog($"?? OCR SONUÇLARI:");
+                SafeLog($"   - Model S".PadRight(30) + $": '{(string.IsNullOrEmpty(sResult) ? "[Boş]" : sResult)}' ({sTime}ms)");
 
                 if (v8Result != null)
                 {
@@ -1061,17 +1221,22 @@ namespace ALPR
                 }
                 else
                 {
-                    SafeLog($"   - Titan v8   : [Dedektör Yüklenemedi]", Color.Gray);
+                    SafeLog($"   - Titan v8".PadRight(30) + $": [Yüklenmedi]", Color.Gray);
                 }
 
-                // Öncelik Sırası: Model S > Model XS > Titan V8 > Absolute > Sentinel > V3
-                // Kullanıcı isteği: İlk modelin (S) tahmini basılmalı
-                if (!string.IsNullOrEmpty(sResult)) return sResult;
-                if (!string.IsNullOrEmpty(xsResult)) return xsResult;
+                //if (parseqResult != null)
+                //{
+                //    LogParseqResult(parseqResult, parseqTime);
+                //}
+                //else
+                //{
+                //    SafeLog($"   - Parseq".PadRight(30) + $": [Yüklenmedi]", Color.Gray);
+                //}
+
+                // Öncelik Sırası: Parseq > Titan V8 > Model S
+                if (parseqResult != null && !string.IsNullOrEmpty(parseqResult.Text)) return parseqResult.Text;
                 if (v8Result != null && !string.IsNullOrEmpty(v8Result.Text)) return v8Result.Text;
-                if (absoluteResult != null && !string.IsNullOrEmpty(absoluteResult.Text)) return absoluteResult.Text;
-                if (sentinelResult != null && !string.IsNullOrEmpty(sentinelResult.Text)) return sentinelResult.Text;
-                return v3Result;
+                return sResult;
             }
             catch (Exception ex)
             {
@@ -1163,9 +1328,6 @@ namespace ALPR
             }
         }
 
-        // Helper methods
-        private bool AreDetectorsReady() => _plateDetector != null && (_charDetector != null || _charDetectorXS != null || _titanArmorDetector != null || _titanV8Detector != null);
-
         private void ResetFrameCounter()
         {
             _frameCount = 0;
@@ -1183,7 +1345,7 @@ namespace ALPR
             btnStartVideo.Enabled = !playing;
             btnStopVideo.Enabled = playing;
             btnSelectVideo.Enabled = !playing;
-            btnSelectPlateModel.Enabled = !playing; // Model değiştirme video sırasında devre dışı
+            cmbPlateModelType.Enabled = !playing; // Model değiştirme video sırasında devre dışı
         }
 
         private int GetFrameSkipValue()
@@ -1251,21 +1413,35 @@ namespace ALPR
 
         private void SafeUpdateImage(Bitmap result)
         {
-            if (InvokeRequired)
+            if (_isDisposed) return;
+
+            if (pictureBoxImage.InvokeRequired)
             {
-                Invoke(() => SafeUpdateImage(result));
+                pictureBoxImage.BeginInvoke(new Action(() => SafeUpdateImage(result)));
                 return;
             }
 
-            pictureBoxImage.Image?.Dispose();
-            pictureBoxImage.Image = new Bitmap(result);
+            try
+            {
+                if (result != null && result.Width > 0 && result.Height > 0)
+                {
+                    pictureBoxImage.Image?.Dispose();
+                    pictureBoxImage.Image = new Bitmap(result);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"PictureBox hata: {ex.Message}");
+            }
         }
 
         private void SafeUpdateFpsDisplay(double fps)
         {
-            if (InvokeRequired)
+            if (_isDisposed) return;
+
+            if (lblFps.InvokeRequired)
             {
-                Invoke(() => SafeUpdateFpsDisplay(fps));
+                lblFps.BeginInvoke(new Action(() => SafeUpdateFpsDisplay(fps)));
                 return;
             }
 
@@ -1274,11 +1450,6 @@ namespace ALPR
 
         private void SafeLog(string message, Color? color = null)
         {
-            if (InvokeRequired)
-            {
-                Invoke(() => Log(message, color));
-                return;
-            }
             Log(message, color);
         }
 
@@ -1297,53 +1468,27 @@ namespace ALPR
             }
         }
 
-        private void LogSentinelResult(SentinelResult result, long durationMs)
+        private void LogParseqResult(ParseqOcrResult result, long durationMs)
         {
-            if (InvokeRequired)
+            if (_isDisposed) return;
+
+            if (!txtLog.IsHandleCreated)
             {
-                Invoke(() => LogSentinelResult(result, durationMs));
+                Debug.WriteLine($"[HANDLE NOT CREATED] Parseq OCR: {result.Text}");
+                return;
+            }
+
+            if (txtLog.InvokeRequired)
+            {
+                txtLog.BeginInvoke(new Action(() => LogParseqResult(result, durationMs)));
                 return;
             }
 
             var timestamp = DateTime.Now.ToString("HH:mm:ss");
-            
-            // Başlık kısmı
-            txtLog.SelectionStart = txtLog.TextLength;
-            txtLog.SelectionColor = Color.DarkSlateBlue;
-            txtLog.AppendText($"[{timestamp}] " + "   - Sentinel v6".PadRight(30) + ": '");
-
-            // Karakter karakter renklendirme
-            foreach (var detail in result.Details)
-            {
-                // Güven puanına göre grilik ayarı (1.0 = Siyah, 0.0 = Açık Gri)
-                // Formül: 255 * (1 - conf) -> ama çok açık olmasın diye sınırlıyoruz
-                int colorVal = (int)(180 * (1.0f - detail.Confidence));
-                txtLog.SelectionColor = Color.FromArgb(colorVal, colorVal, colorVal);
-                txtLog.AppendText(detail.Character.ToString());
-            }
-
-            txtLog.SelectionColor = Color.DarkSlateBlue;
-            float avgAcc = result.Details.Any() ? result.Details.Average(d => d.Confidence) : 0f;
-            txtLog.AppendText($"' (Acc: {avgAcc:P1}, Secure: {result.IsSecure}) ({durationMs}ms){Environment.NewLine}");
 
             txtLog.SelectionStart = txtLog.TextLength;
-            txtLog.ScrollToCaret();
-        }
-
-        private void LogAbsoluteResult(OcrResult result, long durationMs)
-        {
-            if (InvokeRequired)
-            {
-                Invoke(() => LogAbsoluteResult(result, durationMs));
-                return;
-            }
-
-            var timestamp = DateTime.Now.ToString("HH:mm:ss");
-            
-            // Başlık kısmı
-            txtLog.SelectionStart = txtLog.TextLength;
-            txtLog.SelectionColor = Color.SaddleBrown;
-            txtLog.AppendText($"[{timestamp}] " + "   - Abs v6.3".PadRight(30) + ": '");
+            txtLog.SelectionColor = Color.DarkOrchid;
+            txtLog.AppendText($"[{timestamp}] " + "   - Parseq".PadRight(30) + ": '");
 
             foreach (var detail in result.Details)
             {
@@ -1352,9 +1497,8 @@ namespace ALPR
                 txtLog.AppendText(detail.Character.ToString());
             }
 
-            txtLog.SelectionColor = Color.SaddleBrown;
-            float avgAcc = result.Details.Any() ? result.Details.Average(d => d.Confidence) : 0f;
-            txtLog.AppendText($"' (Acc: {avgAcc:P1}, Secure: {result.IsSecure}) ({durationMs}ms){Environment.NewLine}");
+            txtLog.SelectionColor = Color.DarkOrchid;
+            txtLog.AppendText($"' (Acc: {result.AverageConfidence:P1}) ({durationMs}ms){Environment.NewLine}");
 
             txtLog.SelectionStart = txtLog.TextLength;
             txtLog.ScrollToCaret();
@@ -1362,14 +1506,22 @@ namespace ALPR
 
         private void LogV8Result(TitanV8ModelResult result, long durationMs)
         {
-            if (InvokeRequired)
+            if (_isDisposed) return;
+
+            if (!txtLog.IsHandleCreated)
             {
-                Invoke(() => LogV8Result(result, durationMs));
+                Debug.WriteLine($"[HANDLE NOT CREATED] Titan V8 OCR: {result.Text}");
+                return;
+            }
+
+            if (txtLog.InvokeRequired)
+            {
+                txtLog.BeginInvoke(new Action(() => LogV8Result(result, durationMs)));
                 return;
             }
 
             var timestamp = DateTime.Now.ToString("HH:mm:ss");
-            
+
             // Başlık kısmı
             txtLog.SelectionStart = txtLog.TextLength;
             txtLog.SelectionColor = Color.Teal; // Farklı bir renk seçildi
@@ -1394,10 +1546,16 @@ namespace ALPR
         private void Log(string message, Color? color = null)
         {
             if (_isDisposed) return;
-            
-            if (InvokeRequired)
+
+            if (!txtLog.IsHandleCreated)
             {
-                Invoke(() => Log(message, color));
+                Debug.WriteLine($"[HANDLE NOT CREATED] {message}");
+                return;
+            }
+
+            if (txtLog.InvokeRequired)
+            {
+                txtLog.BeginInvoke(new Action(() => Log(message, color)));
                 return;
             }
 
@@ -1407,7 +1565,7 @@ namespace ALPR
                 if (message.Contains("❌")) color = Color.DarkRed;
                 else if (message.Contains("✅") || message.Contains("??")) color = Color.DarkGreen;
                 else if (message.Contains("⚠️")) color = Color.DarkGoldenrod;
-                else color = Color.Black; 
+                else color = Color.Black;
             }
 
             var timestamp = DateTime.Now.ToString("HH:mm:ss");
@@ -1445,12 +1603,11 @@ namespace ALPR
             if (disposing && !_isDisposed)
             {
                 _isDisposed = true;
-                _plateDetector?.Dispose();
+                _plateDetectorV1?.Dispose();
+                _plateDetectorV2?.Dispose();
                 _charDetector?.Dispose();
-                _titanArmorDetector?.Dispose();
-                _sentinelDetector?.Dispose();
-                _absoluteDetector?.Dispose();
                 _titanV8Detector?.Dispose();
+                _parseqDetector?.Dispose();
                 _capture?.Dispose();
                 pictureBoxImage.Image?.Dispose();
                 components?.Dispose();
@@ -1458,10 +1615,26 @@ namespace ALPR
             base.Dispose(disposing);
         }
 
-        private void btnFastOCR_Click(object sender, EventArgs e)
+        private void btnPause_Click(object sender, EventArgs e)
         {
-            var frmFastOCR = new frmFastOCR();
-            frmFastOCR.Show();
+            if (!_isVideoPlaying) return;
+
+            if (_isVideoPaused)
+            {
+                // Resume
+                _isVideoPaused = false;
+                _pauseEvent.Set();
+                btnPause.Text = "⏸ Duraklat";
+                SafeLog("▶️ Video devam ediyor");
+            }
+            else
+            {
+                // Pause
+                _isVideoPaused = true;
+                _pauseEvent.Reset();
+                btnPause.Text = "▶️ Devam Et";
+                SafeLog("⏸ Video duraklatıldı");
+            }
         }
     }
 }

@@ -1,0 +1,337 @@
+{
+  "model_config": {
+    "nc": 46,
+    "input_size": {
+      "width": 192,
+      "height": 64
+    },
+    "output_names": {
+      "ocr": "output_ocr",
+      "country": "output_country"
+    }
+  },
+  "classes": [
+    {
+      "id": 0,
+      "code": "generic",
+      "label": "lp_generic",
+      "name": "Bilinmiyor",
+      "is_country": false
+    },
+    {
+      "id": 1,
+      "code": "al",
+      "label": "lp_al",
+      "name": "Arnavutluk",
+      "is_country": true
+    },
+    {
+      "id": 2,
+      "code": "at",
+      "label": "lp_at",
+      "name": "Avusturya",
+      "is_country": true
+    },
+    {
+      "id": 3,
+      "code": "ax",
+      "label": "lp_ax",
+      "name": "Aland Adaları",
+      "is_country": true
+    },
+    {
+      "id": 4,
+      "code": "az",
+      "label": "lp_az",
+      "name": "Azerbaycan",
+      "is_country": true
+    },
+    {
+      "id": 5,
+      "code": "ba",
+      "label": "lp_ba",
+      "name": "Bosna Hersek",
+      "is_country": true
+    },
+    {
+      "id": 6,
+      "code": "be",
+      "label": "lp_be",
+      "name": "Belçika",
+      "is_country": true
+    },
+    {
+      "id": 7,
+      "code": "bg",
+      "label": "lp_bg",
+      "name": "Bulgaristan",
+      "is_country": true
+    },
+    {
+      "id": 8,
+      "code": "cz",
+      "label": "lp_cz",
+      "name": "Çekya",
+      "is_country": true
+    },
+    {
+      "id": 9,
+      "code": "de",
+      "label": "lp_de",
+      "name": "Almanya",
+      "is_country": true
+    },
+    {
+      "id": 10,
+      "code": "dk",
+      "label": "lp_dk",
+      "name": "Danimarka",
+      "is_country": true
+    },
+    {
+      "id": 11,
+      "code": "ee",
+      "label": "lp_ee",
+      "name": "Estonya",
+      "is_country": true
+    },
+    {
+      "id": 12,
+      "code": "es",
+      "label": "lp_es",
+      "name": "İspanya",
+      "is_country": true
+    },
+    {
+      "id": 13,
+      "code": "fi",
+      "label": "lp_fi",
+      "name": "Finlandiya",
+      "is_country": true
+    },
+    {
+      "id": 14,
+      "code": "fr",
+      "label": "lp_fr",
+      "name": "Fransa",
+      "is_country": true
+    },
+    {
+      "id": 15,
+      "code": "ge",
+      "label": "lp_ge",
+      "name": "Gürcistan",
+      "is_country": true
+    },
+    {
+      "id": 16,
+      "code": "hr",
+      "label": "lp_hr",
+      "name": "Hırvatistan",
+      "is_country": true
+    },
+    {
+      "id": 17,
+      "code": "ie",
+      "label": "lp_ie",
+      "name": "İrlanda",
+      "is_country": true
+    },
+    {
+      "id": 18,
+      "code": "nl",
+      "label": "lp_nl",
+      "name": "Hollanda",
+      "is_country": true
+    },
+    {
+      "id": 19,
+      "code": "tr",
+      "label": "lp_tr",
+      "name": "Türkiye",
+      "is_country": true
+    },
+    {
+      "id": 20,
+      "code": "uk",
+      "label": "lp_uk",
+      "name": "Birleşik Krallık",
+      "is_country": true
+    },
+    {
+      "id": 21,
+      "code": "us",
+      "label": "lp_us",
+      "name": "ABD",
+      "is_country": true
+    },
+    {
+      "id": 22,
+      "code": "is",
+      "label": "lp_is",
+      "name": "İzlanda",
+      "is_country": true
+    },
+    {
+      "id": 23,
+      "code": "it",
+      "label": "lp_it",
+      "name": "İtalya",
+      "is_country": true
+    },
+    {
+      "id": 24,
+      "code": "me",
+      "label": "lp_me",
+      "name": "Karadağ",
+      "is_country": true
+    },
+    {
+      "id": 25,
+      "code": "mk",
+      "label": "lp_mk",
+      "name": "Kuzey Makedonya",
+      "is_country": true
+    },
+    {
+      "id": 26,
+      "code": "se",
+      "label": "lp_se",
+      "name": "İsveç",
+      "is_country": true
+    },
+    {
+      "id": 27,
+      "code": "lt",
+      "label": "lp_lt",
+      "name": "Litvanya",
+      "is_country": true
+    },
+    {
+      "id": 28,
+      "code": "pl",
+      "label": "lp_pl",
+      "name": "Polonya",
+      "is_country": true
+    },
+    {
+      "id": 29,
+      "code": "ro",
+      "label": "lp_ro",
+      "name": "Romanya",
+      "is_country": true
+    },
+    {
+      "id": 30,
+      "code": "gr",
+      "label": "lp_gr",
+      "name": "Yunanistan",
+      "is_country": true
+    },
+    {
+      "id": 31,
+      "code": "hu",
+      "label": "lp_hu",
+      "name": "Macaristan",
+      "is_country": true
+    },
+    {
+      "id": 32,
+      "code": "ru",
+      "label": "lp_ru",
+      "name": "Rusya",
+      "is_country": true
+    },
+    {
+      "id": 33,
+      "code": "ch",
+      "label": "lp_ch",
+      "name": "İsviçre",
+      "is_country": true
+    },
+    {
+      "id": 34,
+      "code": "lu",
+      "label": "lp_lu",
+      "name": "Lüksemburg",
+      "is_country": true
+    },
+    {
+      "id": 35,
+      "code": "si",
+      "label": "lp_si",
+      "name": "Slovenya",
+      "is_country": true
+    },
+    {
+      "id": 36,
+      "code": "by",
+      "label": "lp_by",
+      "name": "Belarus",
+      "is_country": true
+    },
+    {
+      "id": 37,
+      "code": "rs",
+      "label": "lp_rs",
+      "name": "Sırbistan",
+      "is_country": true
+    },
+    {
+      "id": 38,
+      "code": "ua",
+      "label": "lp_ua",
+      "name": "Ukrayna",
+      "is_country": true
+    },
+    {
+      "id": 39,
+      "code": "sk",
+      "label": "lp_sk",
+      "name": "Slovakya",
+      "is_country": true
+    },
+    {
+      "id": 40,
+      "code": "mc",
+      "label": "lp_mc",
+      "name": "Monako",
+      "is_country": true
+    },
+    {
+      "id": 41,
+      "code": "kz",
+      "label": "lp_kz",
+      "name": "Kazakistan",
+      "is_country": true
+    },
+    {
+      "id": 42,
+      "code": "lv",
+      "label": "lp_lv",
+      "name": "Letonya",
+      "is_country": true
+    },
+    {
+      "id": 43,
+      "code": "md",
+      "label": "lp_md",
+      "name": "Moldova",
+      "is_country": true
+    },
+    {
+      "id": 44,
+      "code": "no",
+      "label": "lp_no",
+      "name": "Norveç",
+      "is_country": true
+    },
+    {
+      "id": 45,
+      "code": "pt",
+      "label": "lp_pt",
+      "name": "Portekiz",
+      "is_country": true
+    }
+  ]
+}

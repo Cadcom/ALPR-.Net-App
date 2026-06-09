@@ -1,6 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using OpenCvSharp;
@@ -20,8 +17,8 @@ namespace ALPR.Detection
     {
         private readonly InferenceSession _session;
         private readonly string _alphabet = " 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"; // Boşluk + 36 Karakter
-        private const int IMG_WIDTH = 128;
-        private const int IMG_HEIGHT = 64;
+        private const int IMG_WIDTH = 192;
+        private const int IMG_HEIGHT = 96;
 
         public TitanV8Engine(string modelPath, bool useGpu = false)
         {

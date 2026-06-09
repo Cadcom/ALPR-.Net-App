@@ -485,56 +485,56 @@ namespace ALPR
         #endregion
 
         // Controls
-        private System.Windows.Forms.ToolStrip           toolStrip;
-        private System.Windows.Forms.ToolStripButton     btnSelectFolder;
-        private System.Windows.Forms.ToolStripLabel      lblFolderPath;
-        private System.Windows.Forms.ToolStripSeparator  sepNav;
-        private System.Windows.Forms.ToolStripButton     btnPrev;
-        private System.Windows.Forms.ToolStripButton     btnNext;
-        private System.Windows.Forms.ToolStripSeparator  sepClass;
-        private System.Windows.Forms.ToolStripLabel      lblClassLabel;
-        private System.Windows.Forms.ToolStripComboBox   cmbClass;
-        private System.Windows.Forms.ToolStripButton     btnAddClass;
-        private System.Windows.Forms.ToolStripSeparator  sepZoom;
-        private System.Windows.Forms.ToolStripLabel      lblZoomLabel;
-        private System.Windows.Forms.ToolStripButton     btnZoomIn;
-        private System.Windows.Forms.ToolStripButton     btnZoomOut;
-        private System.Windows.Forms.ToolStripButton     btnZoomFit;
-        private System.Windows.Forms.ToolStripLabel      lblZoomPct;
-        private System.Windows.Forms.ToolStripSeparator  sepAutoLabel;
-        private System.Windows.Forms.ToolStripButton     btnAutoLabel;
-        private System.Windows.Forms.ToolStripButton     btnAutoLabelAll;
-        private System.Windows.Forms.ToolStripSeparator  sepPlateList;
-        private System.Windows.Forms.ToolStripButton     btnPlateList;
-        private System.Windows.Forms.ToolStripSeparator  sepTemizle;
-        private System.Windows.Forms.ToolStripButton     btnTemizle;
+        private System.Windows.Forms.ToolStrip toolStrip;
+        private System.Windows.Forms.ToolStripButton btnSelectFolder;
+        private System.Windows.Forms.ToolStripLabel lblFolderPath;
+        private System.Windows.Forms.ToolStripSeparator sepNav;
+        private System.Windows.Forms.ToolStripButton btnPrev;
+        private System.Windows.Forms.ToolStripButton btnNext;
+        private System.Windows.Forms.ToolStripSeparator sepClass;
+        private System.Windows.Forms.ToolStripLabel lblClassLabel;
+        private System.Windows.Forms.ToolStripComboBox cmbClass;
+        private System.Windows.Forms.ToolStripButton btnAddClass;
+        private System.Windows.Forms.ToolStripSeparator sepZoom;
+        private System.Windows.Forms.ToolStripLabel lblZoomLabel;
+        private System.Windows.Forms.ToolStripButton btnZoomIn;
+        private System.Windows.Forms.ToolStripButton btnZoomOut;
+        private System.Windows.Forms.ToolStripButton btnZoomFit;
+        private System.Windows.Forms.ToolStripLabel lblZoomPct;
+        private System.Windows.Forms.ToolStripSeparator sepAutoLabel;
+        private System.Windows.Forms.ToolStripButton btnAutoLabel;
+        private System.Windows.Forms.ToolStripButton btnAutoLabelAll;
+        private System.Windows.Forms.ToolStripSeparator sepPlateList;
+        private System.Windows.Forms.ToolStripButton btnPlateList;
+        private System.Windows.Forms.ToolStripSeparator sepTemizle;
+        private System.Windows.Forms.ToolStripButton btnTemizle;
 
-        private System.Windows.Forms.StatusStrip         statusStrip;
+        private System.Windows.Forms.StatusStrip statusStrip;
         private System.Windows.Forms.ToolStripStatusLabel lblStatus;
         private System.Windows.Forms.ToolStripProgressBar pbAutoLabel;
         private System.Windows.Forms.ToolStripStatusLabel lblSaved;
 
-        private System.Windows.Forms.Panel               pnlLeft;
-        private System.Windows.Forms.TextBox             txtThumbFilter;
-        private System.Windows.Forms.ListView            lvThumbnails;
-        private System.Windows.Forms.ImageList           imgListThumb;
-        private System.Windows.Forms.Splitter            splitterLeft;
+        private System.Windows.Forms.Panel pnlLeft;
+        private System.Windows.Forms.TextBox txtThumbFilter;
+        private System.Windows.Forms.ListView lvThumbnails;
+        private System.Windows.Forms.ImageList imgListThumb;
+        private System.Windows.Forms.Splitter splitterLeft;
 
-        private System.Windows.Forms.Panel               pnlRight;
-        private System.Windows.Forms.Label               lblAnnotationsHeader;
-        private System.Windows.Forms.ListView            lvAnnotations;
-        private System.Windows.Forms.ColumnHeader        colAnnId;
-        private System.Windows.Forms.ColumnHeader        colAnnClass;
-        private System.Windows.Forms.ColumnHeader        colAnnCx;
-        private System.Windows.Forms.ColumnHeader        colAnnCy;
-        private System.Windows.Forms.ColumnHeader        colAnnW;
-        private System.Windows.Forms.ColumnHeader        colAnnH;
-        private System.Windows.Forms.Button              btnDeleteAnnotation;
-        private System.Windows.Forms.Button              btnEditAnnotation;
-        private System.Windows.Forms.Button              btnSaveNow;
-        private System.Windows.Forms.Splitter            splitterRight;
+        private System.Windows.Forms.Panel pnlRight;
+        private System.Windows.Forms.Label lblAnnotationsHeader;
+        private System.Windows.Forms.ListView lvAnnotations;
+        private System.Windows.Forms.ColumnHeader colAnnId;
+        private System.Windows.Forms.ColumnHeader colAnnClass;
+        private System.Windows.Forms.ColumnHeader colAnnCx;
+        private System.Windows.Forms.ColumnHeader colAnnCy;
+        private System.Windows.Forms.ColumnHeader colAnnW;
+        private System.Windows.Forms.ColumnHeader colAnnH;
+        private System.Windows.Forms.Button btnDeleteAnnotation;
+        private System.Windows.Forms.Button btnEditAnnotation;
+        private System.Windows.Forms.Button btnSaveNow;
+        private System.Windows.Forms.Splitter splitterRight;
 
-        private System.Windows.Forms.Panel               pnlCanvas;
-        private System.Windows.Forms.PictureBox          picCanvas;
+        private System.Windows.Forms.Panel pnlCanvas;
+        private System.Windows.Forms.PictureBox picCanvas;
     }
 }

@@ -1,12 +1,12 @@
-using Microsoft.ML.OnnxRuntime;
+ï»¿using Microsoft.ML.OnnxRuntime;
 using System.Runtime.InteropServices;
 
 namespace ALPR.Detection
 {
     /// <summary>
-    /// ONNX Runtime için GPU/CPU ExecutionProvider yönetimi
-    /// DirectML (Windows GPU), CUDA (NVIDIA GPU) ve CPU desteği
-    /// Python fast_plate_ocr'daki providers=['DmlExecutionProvider', 'CUDAExecutionProvider', 'CPUExecutionProvider'] ile aynı mantık
+    /// ONNX Runtime iÃ§in GPU/CPU ExecutionProvider yÃ¶netimi
+    /// DirectML (Windows GPU), CUDA (NVIDIA GPU) ve CPU desteÄŸi
+    /// Python fast_plate_ocr'daki providers=['DmlExecutionProvider', 'CUDAExecutionProvider', 'CPUExecutionProvider'] ile aynÄ± mantÄ±k
     /// </summary>
     public static class ExecutionProviderHelper
     {
@@ -15,10 +15,6 @@ namespace ALPR.Detection
         
         public static Action<string>? Logger { get; set; }
 
-        /// <summary>
-        /// Optimize edilmiş SessionOptions oluşturur
-        /// Öncelik sırası: DirectML (Windows GPU) -> CUDA (NVIDIA GPU) -> CPU
-        /// </summary>
         public static SessionOptions CreateOptimizedSessionOptions(bool preferGpu = true)
         {
             var sessionOptions = new SessionOptions
@@ -34,31 +30,65 @@ namespace ALPR.Detection
 
             if (!preferGpu)
             {
-                Log("??? CPU kullanılıyor (Optimize edilmiş)");
+                Log("âš ï¸ CPU kullanÄ±lÄ±yor (Optimize edilmiÅŸ)");
                 return sessionOptions;
             }
 
-            // Önce DirectML (Windows için - tüm GPU'ları destekler: NVIDIA, AMD, Intel)
-            if (TryEnableDirectML(sessionOptions))
+            // 1. TensorRT (NVIDIA - en hÄ±zlÄ±)
+            if (TryEnableTensorRT(sessionOptions))
             {
-                Log("? GPU: DirectML (Windows) kullanılıyor - Tüm GPU'lar destekleniyor");
+                Log("ğŸš€ GPU: TensorRT (NVIDIA) kullanÄ±lÄ±yor");
                 return sessionOptions;
             }
 
-            // DirectML yoksa CUDA dene (Sadece NVIDIA)
+            // 2. CUDA (NVIDIA)
             if (TryEnableCuda(sessionOptions))
             {
-                Log("?? GPU: CUDA (NVIDIA) kullanılıyor");
+                Log("ğŸ”¥ GPU: CUDA (NVIDIA) kullanÄ±lÄ±yor");
                 return sessionOptions;
             }
 
-            Log("??? CPU kullanılıyor (GPU bulunamadı)");
+            // 3. DirectML (Windows - AMD/Intel/NVIDIA fallback)
+            if (TryEnableDirectML(sessionOptions))
+            {
+                Log("âœ… GPU: DirectML (Windows) kullanÄ±lÄ±yor");
+                return sessionOptions;
+            }
+
+            Log("âš ï¸ CPU kullanÄ±lÄ±yor (GPU bulunamadÄ±)");
             return sessionOptions;
         }
 
+        private static bool TryEnableTensorRT(SessionOptions options)
+        {
+            try
+            {
+                var trtOptions = new OrtTensorRTProviderOptions();
+                trtOptions.UpdateOptions(new Dictionary<string, string>
+                {
+                    ["device_id"] = "0",
+                    ["trt_engine_cache_enable"] = "1",
+                    ["trt_engine_cache_path"] = "./trt_cache",
+                    ["trt_fp16_enable"] = "1"
+                });
+                options.AppendExecutionProvider_Tensorrt(trtOptions);
+                options.AppendExecutionProvider_CUDA(0);
+                Directory.CreateDirectory("./trt_cache");
+                System.Diagnostics.Debug.WriteLine("TensorRT: âœ… YÃ¼klendi");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"TensorRT: âŒ Hata â†’ {ex.GetType().Name}: {ex.Message}");
+                if (ex.InnerException != null)
+                    System.Diagnostics.Debug.WriteLine($"TensorRT: Inner â†’ {ex.InnerException.Message}");
+                return false;
+            }
+        }
+
         /// <summary>
-        /// DirectML provider'ı etkinleştirmeyi dener (Windows GPU - AMD, NVIDIA, Intel)
-        /// Python'daki 'DmlExecutionProvider' ile aynı
+        /// DirectML provider'Ä± etkinleÅŸtirmeyi dener (Windows GPU - AMD, NVIDIA, Intel)
+        /// Python'daki 'DmlExecutionProvider' ile aynÄ±
         /// </summary>
         private static bool TryEnableDirectML(SessionOptions options)
         {
@@ -75,14 +105,14 @@ namespace ALPR.Detection
             }
             catch (Exception ex)
             {
-                Log($"?? DirectML yüklenemedi: {ex.Message}");
+                Log($"?? DirectML yÃ¼klenemedi: {ex.Message}");
                 return false;
             }
         }
 
         /// <summary>
-        /// CUDA provider'ı etkinleştirmeyi dener (NVIDIA GPU)
-        /// Python'daki 'CUDAExecutionProvider' ile aynı
+        /// CUDA provider'Ä± etkinleÅŸtirmeyi dener (NVIDIA GPU)
+        /// Python'daki 'CUDAExecutionProvider' ile aynÄ±
         /// </summary>
         private static bool TryEnableCuda(SessionOptions options)
         {
@@ -96,7 +126,7 @@ namespace ALPR.Detection
             }
             catch (Exception ex)
             {
-                Log($"?? CUDA yüklenemedi: {ex.Message}");
+                Log($"?? CUDA yÃ¼klenemedi: {ex.Message}");
                 return false;
             }
         }
@@ -115,12 +145,12 @@ namespace ALPR.Detection
             {
                 using var opts = new SessionOptions();
                 opts.AppendExecutionProvider_DML(0);
-                System.Diagnostics.Debug.WriteLine("? DirectML provider başarıyla yüklendi!");
+                System.Diagnostics.Debug.WriteLine("? DirectML provider baÅŸarÄ±yla yÃ¼klendi!");
                 return true;
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine("? DirectML provider yüklenemedi:");
+                System.Diagnostics.Debug.WriteLine("? DirectML provider yÃ¼klenemedi:");
                 System.Diagnostics.Debug.WriteLine($"   Hata: {ex.GetType().Name}");
                 System.Diagnostics.Debug.WriteLine($"   Mesaj: {ex.Message}");
 
@@ -131,7 +161,7 @@ namespace ALPR.Detection
 
                 if (ex.Message.Contains("DLL") || ex.Message.Contains("library"))
                 {
-                    System.Diagnostics.Debug.WriteLine("   ?? Çözüm: Microsoft.ML.OnnxRuntime.DirectML NuGet paketini yükleyin");
+                    System.Diagnostics.Debug.WriteLine("   ?? Ã‡Ã¶zÃ¼m: Microsoft.ML.OnnxRuntime.DirectML NuGet paketini yÃ¼kleyin");
                 }
 
                 return false;
@@ -149,12 +179,12 @@ namespace ALPR.Detection
             {
                 using var opts = new SessionOptions();
                 opts.AppendExecutionProvider_CUDA(0);
-                System.Diagnostics.Debug.WriteLine("? CUDA provider başarıyla yüklendi!");
+                System.Diagnostics.Debug.WriteLine("? CUDA provider baÅŸarÄ±yla yÃ¼klendi!");
                 return true;
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine("? CUDA provider yüklenemedi:");
+                System.Diagnostics.Debug.WriteLine("? CUDA provider yÃ¼klenemedi:");
                 System.Diagnostics.Debug.WriteLine($"   Hata: {ex.GetType().Name}");
                 System.Diagnostics.Debug.WriteLine($"   Mesaj: {ex.Message}");
 
@@ -165,8 +195,8 @@ namespace ALPR.Detection
 
                 if (ex.Message.Contains("DLL") || ex.Message.Contains("library"))
                 {
-                    System.Diagnostics.Debug.WriteLine("   ?? Çözüm: Microsoft.ML.OnnxRuntime.Gpu NuGet paketini yükleyin");
-                    System.Diagnostics.Debug.WriteLine("   ?? veya onnxruntime_providers_cuda.dll dosyasını çalışma dizinine kopyalayın");
+                    System.Diagnostics.Debug.WriteLine("   ?? Ã‡Ã¶zÃ¼m: Microsoft.ML.OnnxRuntime.Gpu NuGet paketini yÃ¼kleyin");
+                    System.Diagnostics.Debug.WriteLine("   ?? veya onnxruntime_providers_cuda.dll dosyasÄ±nÄ± Ã§alÄ±ÅŸma dizinine kopyalayÄ±n");
                 }
 
                 return false;
@@ -200,9 +230,9 @@ namespace ALPR.Detection
         {
             var info = new System.Text.StringBuilder();
             
-            info.AppendLine($"İşletim Sistemi: {RuntimeInformation.OSDescription}");
+            info.AppendLine($"Ä°ÅŸletim Sistemi: {RuntimeInformation.OSDescription}");
             info.AppendLine($"Mimari: {RuntimeInformation.OSArchitecture}");
-            info.AppendLine($"İşlemci Sayısı: {Environment.ProcessorCount}");
+            info.AppendLine($"Ä°ÅŸlemci SayÄ±sÄ±: {Environment.ProcessorCount}");
             info.AppendLine($"Optimal Thread: {GetOptimalThreadCount()}");
             
             if (IsDirectMLAvailable())
@@ -218,7 +248,7 @@ namespace ALPR.Detection
             
             if (!IsDirectMLAvailable() && !IsGpuAvailable())
             {
-                info.AppendLine($"GPU Kullanılabilir: Hayır");
+                info.AppendLine($"GPU KullanÄ±labilir: HayÄ±r");
             }
             
             info.AppendLine($"Desteklenen Provider'lar: {GetAvailableProviders()}");

@@ -5,16 +5,10 @@ using System.Drawing.Drawing2D;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using System.Windows.Forms;
 
 namespace ALPR
 {
-    // ─────────────────────────────────────────────────────────────────────────
-    // Form logic
-    // ─────────────────────────────────────────────────────────────────────────
-
-
     public partial class ImageLabeling : Form
     {
         // ── State ────────────────────────────────────────────────────────────
@@ -22,63 +16,65 @@ namespace ALPR
         private string _datasetPath = "";
         private List<string> _imageFiles = new();
         private List<string> _classes = new() { "plate" };
-        private int _selectedClassId = 0;   // ToolStrip focus kaybında SelectedIndex -1 döner
+        private int _selectedClassId = 0;
         private DatasetRoot _dataset = new();
 
         private int _currentIndex = -1;
         private Bitmap? _currentImage = null;
 
-        private List<BBoxAnnotation> _annotations = new();          // current image annotations
-        private int _selectedAnnot = -1;            // index in _annotations
-        // Thumbnail filter text (for lvThumbnails)
+        private List<BBoxAnnotation> _annotations = new();
+        private int _selectedAnnot = -1;
+
         private string _thumbFilter = string.Empty;
         private System.Threading.CancellationTokenSource? _thumbCts;
 
-        // ── Zoom ────────────────────────────────────────────────────────────
+        // ── Zoom ─────────────────────────────────────────────────────────────
         private float _zoom = 1.0f;
         private const float ZoomStep = 0.15f;
         private const float ZoomMin = 0.05f;
         private const float ZoomMax = 10.0f;
 
-        // ── Drawing state ───────────────────────────────────────────────────
+        // ── Drawing state ─────────────────────────────────────────────────────
         private enum DrawMode { None, Drawing, Moving, Resizing }
         private DrawMode _drawMode = DrawMode.None;
 
-        private PointF _dragStart;           // canvas coords
-        private RectangleF _drawRect;        // in-progress draw rect (canvas coords)
+        private PointF _dragStart;
+        private RectangleF _drawRect;
+        private PointF _moveOffset;
+        private RectangleF _originalRect;
 
-        private PointF _moveOffset;        // offset within bbox when dragging
-        private RectangleF _originalRect;    // bbox rect before resize starts
-
-        private enum Handle { None, Top, Bottom, Left, Right, TopLeft, TopRight, BottomLeft, BottomRight }
+        private enum Handle
+        {
+            None,
+            Top, Bottom, Left, Right,
+            TopLeft, TopRight, BottomLeft, BottomRight
+        }
         private Handle _activeHandle = Handle.None;
         private const int HandleSize = 7;
 
-        // ── Class colors (deterministic per classId) ─────────────────────────
-        private static readonly Color[] _palette = {
-            Color.FromArgb(255,  80,  80),   // 0 red
-            Color.FromArgb( 80, 200,  80),   // 1 green
-            Color.FromArgb( 80, 140, 255),   // 2 blue
-            Color.FromArgb(255, 200,  50),   // 3 yellow
-            Color.FromArgb(220,  80, 220),   // 4 magenta
-            Color.FromArgb( 80, 210, 210),   // 5 cyan
-            Color.FromArgb(255, 140,  40),   // 6 orange
-            Color.FromArgb(160, 255, 100),   // 7 lime
+        // ── Class color palette ───────────────────────────────────────────────
+        private static readonly Color[] _palette =
+        {
+            Color.FromArgb(255,  80,  80),
+            Color.FromArgb( 80, 200,  80),
+            Color.FromArgb( 80, 140, 255),
+            Color.FromArgb(255, 200,  50),
+            Color.FromArgb(220,  80, 220),
+            Color.FromArgb( 80, 210, 210),
+            Color.FromArgb(255, 140,  40),
+            Color.FromArgb(160, 255, 100),
         };
 
-        private Color ClassColor(int id)
+        private static Color ClassColor(int id)
         {
             if (id < 0) return Color.White;
             if (id < _palette.Length) return _palette[id];
 
             var rnd = new Random(id * 73);
-            int r = rnd.Next(60, 240);
-            int g = rnd.Next(60, 240);
-            int b = rnd.Next(60, 240);
-            return Color.FromArgb(255, r, g, b);
+            return Color.FromArgb(255, rnd.Next(60, 240), rnd.Next(60, 240), rnd.Next(60, 240));
         }
 
-        // ── Constructor ──────────────────────────────────────────────────────
+        // ── Constructor ───────────────────────────────────────────────────────
         public ImageLabeling()
         {
             InitializeComponent();
@@ -87,9 +83,9 @@ namespace ALPR
             UpdateNavButtons();
         }
 
+        // ── Thumbnail filter ──────────────────────────────────────────────────
         private void txtThumbFilter_TextChanged(object? sender, EventArgs e)
         {
-            // Update filter and rebuild thumbnails
             try
             {
                 _thumbFilter = txtThumbFilter?.Text?.Trim() ?? string.Empty;
@@ -98,9 +94,9 @@ namespace ALPR
             catch { }
         }
 
-        // ────────────────────────────────────────────────────────────────────
-        // Folder / JSON helpers
-        // ────────────────────────────────────────────────────────────────────
+        // ─────────────────────────────────────────────────────────────────────
+        // Folder / JSON
+        // ─────────────────────────────────────────────────────────────────────
 
         private void btnSelectFolder_Click(object sender, EventArgs e)
         {
@@ -112,16 +108,18 @@ namespace ALPR
         private void LoadFolder(string path)
         {
             SaveCurrentAnnotations();
+
             _folderPath = path;
             _datasetPath = Path.Combine(Path.GetDirectoryName(path)!, "dataset.json");
-            lblFolderPath.Text = path;
-            lblFolderPath.ForeColor = System.Drawing.SystemColors.ControlLightLight;
 
-            var exts = new[] { ".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff" };
+            lblFolderPath.Text = path;
+            lblFolderPath.ForeColor = SystemColors.ControlLightLight;
+
+            var extensions = new[] { ".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff" };
             _imageFiles = Directory.GetFiles(path)
-                           .Where(f => exts.Contains(Path.GetExtension(f).ToLower()))
-                           .OrderBy(f => f)
-                           .ToList();
+                .Where(f => extensions.Contains(Path.GetExtension(f).ToLower()))
+                .OrderBy(f => f)
+                .ToList();
 
             LoadDataset();
             BuildThumbnailsAsync();
@@ -133,12 +131,12 @@ namespace ALPR
 
         private void LoadDataset()
         {
-            if (System.IO.File.Exists(_datasetPath))
+            if (File.Exists(_datasetPath))
             {
                 try
                 {
-                    var json = System.IO.File.ReadAllText(_datasetPath);
-                    _dataset = JsonSerializer.Deserialize<DatasetRoot>(json) ?? new DatasetRoot();
+                    _dataset = JsonSerializer.Deserialize<DatasetRoot>(
+                                   File.ReadAllText(_datasetPath)) ?? new DatasetRoot();
                 }
                 catch { _dataset = new DatasetRoot(); }
             }
@@ -147,9 +145,8 @@ namespace ALPR
                 _dataset = new DatasetRoot();
             }
 
-            // Merge classes from dataset
-            foreach (var c in _dataset.Classes)
-                if (!_classes.Contains(c)) _classes.Add(c);
+            foreach (var cls in _dataset.Classes)
+                if (!_classes.Contains(cls)) _classes.Add(cls);
 
             RefreshClassCombo();
         }
@@ -157,71 +154,101 @@ namespace ALPR
         private void SaveDataset()
         {
             if (_datasetPath == "") return;
-            var opts = new JsonSerializerOptions { WriteIndented = true };
+
             _dataset.Classes = new List<string>(_classes);
-            System.IO.File.WriteAllText(_datasetPath, JsonSerializer.Serialize(_dataset, opts));
+            File.WriteAllText(_datasetPath,
+                JsonSerializer.Serialize(_dataset, new JsonSerializerOptions { WriteIndented = true }));
+
             lblSaved.Text = "✓ Kaydedildi";
             lblSaved.ForeColor = Color.Green;
         }
 
-        private string GetDatasetRelativePath(string fullPath)
-        {
-            var dirName = new DirectoryInfo(Path.GetDirectoryName(fullPath)!).Name;
-            return Path.Combine(dirName, Path.GetFileName(fullPath));
-        }
+        /// <summary>
+        /// Returns the dataset-relative path: "folderName/filename.jpg"
+        /// </summary>
+        private static string DatasetRelativePath(string fullPath) =>
+            Path.Combine(new DirectoryInfo(Path.GetDirectoryName(fullPath)!).Name,
+                         Path.GetFileName(fullPath));
 
         private void SaveCurrentAnnotations()
         {
             if (_currentIndex < 0 || _currentImage == null) return;
 
-            string fileName = GetDatasetRelativePath(_imageFiles[_currentIndex]);
-
-            var entry = _dataset.Images.FirstOrDefault(e => e.File == fileName);
-            if (entry == null)
-            {
-                entry = new ImageEntry
-                {
-                    File = fileName,
-                    Width = _currentImage.Width,
-                    Height = _currentImage.Height
-                };
-                _dataset.Images.Add(entry);
-            }
+            var fileName = DatasetRelativePath(_imageFiles[_currentIndex]);
+            var entry = _dataset.Images.FirstOrDefault(e => e.File == fileName)
+                           ?? CreateAndRegisterEntry(fileName);
 
             entry.Width = _currentImage.Width;
             entry.Height = _currentImage.Height;
-            entry.Annotations.Boxes = _annotations
-                .Select(a => new float[] { a.ClassId, a.Cx, a.Cy, a.W, a.H })
-                .ToList();
+            entry.Annotations.Boxes = SerializeAnnotations(_annotations);
 
             SaveDataset();
         }
 
-        // ────────────────────────────────────────────────────────────────────
+        // ─────────────────────────────────────────────────────────────────────
+        // Annotation serialization helpers
+        // ─────────────────────────────────────────────────────────────────────
+
+        /// <summary>Converts float[][] boxes from a dataset entry to BBoxAnnotation list.</summary>
+        private static List<BBoxAnnotation> ParseAnnotations(ImageEntry? entry)
+        {
+            if (entry == null) return new List<BBoxAnnotation>();
+
+            return entry.Annotations.Boxes
+                .Where(b => b.Length >= 5)
+                .Select(b => new BBoxAnnotation
+                {
+                    ClassId = (int)b[0],
+                    Cx = b[1],
+                    Cy = b[2],
+                    W = b[3],
+                    H = b[4]
+                })
+                .ToList();
+        }
+
+        /// <summary>Converts a BBoxAnnotation list to float[][] for JSON storage.</summary>
+        private static List<float[]> SerializeAnnotations(List<BBoxAnnotation> annots) =>
+            annots.Select(a => new float[] { a.ClassId, a.Cx, a.Cy, a.W, a.H }).ToList();
+
+        private ImageEntry CreateAndRegisterEntry(string fileName)
+        {
+            var entry = new ImageEntry
+            {
+                File = fileName,
+                Width = _currentImage!.Width,
+                Height = _currentImage!.Height
+            };
+            _dataset.Images.Add(entry);
+            return entry;
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
         // Thumbnails
-        // ────────────────────────────────────────────────────────────────────
+        // ─────────────────────────────────────────────────────────────────────
 
         private async void BuildThumbnailsAsync()
         {
-            // İptal token: eski görevleri iptal et
             _thumbCts?.Cancel();
             _thumbCts = new System.Threading.CancellationTokenSource();
-            var cancellationToken = _thumbCts.Token;
+            var ct = _thumbCts.Token;
 
-            // Build a filtered list of files based on thumbnail filter (starts-with)
             lvThumbnails.Items.Clear();
             imgListThumb.Images.Clear();
 
-            var filteredList = string.IsNullOrWhiteSpace(_thumbFilter)
+            var filtered = string.IsNullOrWhiteSpace(_thumbFilter)
                 ? _imageFiles
-                : _imageFiles.Where(p => Path.GetFileName(p).StartsWith(_thumbFilter, StringComparison.OrdinalIgnoreCase)).ToList();
+                : _imageFiles.Where(p => Path.GetFileName(p)
+                      .StartsWith(_thumbFilter, StringComparison.OrdinalIgnoreCase))
+                      .ToList();
 
-            // Placeholder items for immediate UI feedback
-            for (int i = 0; i < filteredList.Count; i++)
+            // Add placeholder items immediately so the list feels responsive
+            foreach (var file in filtered)
             {
-                var item = new ListViewItem(Path.GetFileName(filteredList[i]));
-                // store original index for navigation mapping
-                item.Tag = _imageFiles.IndexOf(filteredList[i]);
+                var item = new ListViewItem(Path.GetFileName(file))
+                {
+                    Tag = _imageFiles.IndexOf(file)
+                };
                 lvThumbnails.Items.Add(item);
             }
 
@@ -230,16 +257,16 @@ namespace ALPR
 
             try
             {
-                await Task.Run(() =>
+                await System.Threading.Tasks.Task.Run(() =>
                 {
-                    for (int i = 0; i < filteredList.Count; i++)
+                    for (int i = 0; i < filtered.Count; i++)
                     {
-                        if (cancellationToken.IsCancellationRequested) break;
+                        if (ct.IsCancellationRequested) break;
 
                         Bitmap thumb;
                         try
                         {
-                            using var fs = new FileStream(filteredList[i], FileMode.Open, FileAccess.Read);
+                            using var fs = new FileStream(filtered[i], FileMode.Open, FileAccess.Read);
                             using var bmp = new Bitmap(fs);
                             thumb = new Bitmap(bmp, imgListThumb.ImageSize);
                         }
@@ -248,15 +275,14 @@ namespace ALPR
                             thumb = new Bitmap(imgListThumb.ImageSize.Width, imgListThumb.ImageSize.Height);
                         }
 
-                        if (this.IsDisposed || this.Disposing) break;
+                        if (IsDisposed || Disposing) break;
 
                         int idx = i;
                         try
                         {
-                            this.Invoke((Action)(() =>
+                            Invoke((Action)(() =>
                             {
-                                if (this.IsDisposed || this.Disposing) return;
-                                if (cancellationToken.IsCancellationRequested) return;
+                                if (IsDisposed || Disposing || ct.IsCancellationRequested) return;
                                 if (idx < lvThumbnails.Items.Count)
                                 {
                                     imgListThumb.Images.Add(thumb);
@@ -269,34 +295,29 @@ namespace ALPR
                     }
                 });
             }
-            catch (OperationCanceledException)
-            {
-                // Beklenen: yeni filtre tetiklendiğinde eski task iptal edilir
-            }
+            catch (OperationCanceledException) { /* new filter fired, expected */ }
 
-            if (!this.IsDisposed && !this.Disposing)
-            {
-                UpdateStatus();
-            }
+            if (!IsDisposed && !Disposing) UpdateStatus();
         }
 
         private void lvThumbnails_SelectedIndexChanged(object sender, EventArgs e)
         {
             if (lvThumbnails.SelectedIndices.Count == 0) return;
-            int sel = lvThumbnails.SelectedIndices[0];
-            var item = lvThumbnails.Items[sel];
-            // item.Tag holds original index in _imageFiles
-            int originalIdx = item.Tag is int t ? t : sel;
+
+            var item = lvThumbnails.Items[lvThumbnails.SelectedIndices[0]];
+            int originalIdx = item.Tag is int t ? t : lvThumbnails.SelectedIndices[0];
+
             if (originalIdx == _currentIndex) return;
+
             SaveCurrentAnnotations();
             _currentIndex = originalIdx;
             LoadCurrentImage();
             UpdateNavButtons();
         }
 
-        // ────────────────────────────────────────────────────────────────────
+        // ─────────────────────────────────────────────────────────────────────
         // Image loading & navigation
-        // ────────────────────────────────────────────────────────────────────
+        // ─────────────────────────────────────────────────────────────────────
 
         private void LoadCurrentImage()
         {
@@ -317,7 +338,7 @@ namespace ALPR
             {
                 using var fs = new FileStream(_imageFiles[_currentIndex], FileMode.Open, FileAccess.Read);
                 using var temp = new Bitmap(fs);
-                _currentImage = new Bitmap(temp); // Kilidi kaldırır
+                _currentImage = new Bitmap(temp); // unlocks the file handle
             }
             catch (Exception ex)
             {
@@ -325,34 +346,14 @@ namespace ALPR
                 return;
             }
 
-            // Load existing annotations
-            string fileName = GetDatasetRelativePath(_imageFiles[_currentIndex]);
-            var entry = _dataset.Images.FirstOrDefault(e => e.File == fileName);
-            if (entry != null)
-            {
-                foreach (var box in entry.Annotations.Boxes)
-                {
-                    if (box.Length >= 5)
-                        _annotations.Add(new BBoxAnnotation
-                        {
-                            ClassId = (int)box[0],
-                            Cx = box[1],
-                            Cy = box[2],
-                            W = box[3],
-                            H = box[4]
-                        });
-                }
-            }
+            var fileName = DatasetRelativePath(_imageFiles[_currentIndex]);
+            _annotations = ParseAnnotations(_dataset.Images.FirstOrDefault(e => e.File == fileName));
 
-            // Sync thumbnail selection (find item by Tag, not by direct index)
-            // Çünkü thumbnail listesi filtrelenmiş olabilir
-            var itemToSelect = lvThumbnails.Items.Cast<ListViewItem>()
-                .FirstOrDefault(item => item.Tag is int t && t == _currentIndex);
-            if (itemToSelect != null)
-            {
-                itemToSelect.Selected = true;
-                itemToSelect.EnsureVisible();
-            }
+            // Sync thumbnail selection (list may be filtered, so match by Tag)
+            var thumbItem = lvThumbnails.Items
+                .Cast<ListViewItem>()
+                .FirstOrDefault(it => it.Tag is int t && t == _currentIndex);
+            if (thumbItem != null) { thumbItem.Selected = true; thumbItem.EnsureVisible(); }
 
             FitZoom();
             RefreshAnnotationList();
@@ -388,14 +389,12 @@ namespace ALPR
             lblStatus.Text = $"{name}   ({_currentIndex + 1} / {_imageFiles.Count})   [{_annotations.Count} bbox]";
         }
 
-        // ────────────────────────────────────────────────────────────────────
+        // ─────────────────────────────────────────────────────────────────────
         // Class management
-        // ────────────────────────────────────────────────────────────────────
+        // ─────────────────────────────────────────────────────────────────────
 
         private void RefreshClassCombo()
         {
-            // ToolStripComboBox focus kaybında SelectedIndex -1 verir,
-            // bu yüzden seçimi _selectedClassId field'ında saklarız
             int prev = _selectedClassId;
             cmbClass.SelectedIndexChanged -= cmbClass_SelectedIndexChanged;
             cmbClass.Items.Clear();
@@ -417,30 +416,28 @@ namespace ALPR
         {
             string? name = PromptInput("Yeni class adı:", "Class Ekle");
             if (string.IsNullOrWhiteSpace(name)) return;
+
             name = name.Trim();
-            if (!_classes.Contains(name))
-            {
-                _classes.Add(name);
-                RefreshClassCombo();
-            }
+            if (!_classes.Contains(name)) _classes.Add(name);
+
             int idx = _classes.IndexOf(name);
+            RefreshClassCombo();
             cmbClass.SelectedIndex = idx;
             _selectedClassId = idx;
         }
 
         private int SelectedClassId => _selectedClassId;
 
-        // ────────────────────────────────────────────────────────────────────
+        // ─────────────────────────────────────────────────────────────────────
         // Zoom
-        // ────────────────────────────────────────────────────────────────────
+        // ─────────────────────────────────────────────────────────────────────
 
         private void FitZoom()
         {
             if (_currentImage == null) return;
             float zw = (float)pnlCanvas.ClientSize.Width / _currentImage.Width;
             float zh = (float)pnlCanvas.ClientSize.Height / _currentImage.Height;
-            _zoom = Math.Min(zw, zh);
-            if (_zoom < ZoomMin) _zoom = ZoomMin;
+            _zoom = Math.Max(Math.Min(zw, zh), ZoomMin);
             UpdateCanvas();
         }
 
@@ -448,7 +445,7 @@ namespace ALPR
         private void btnZoomOut_Click(object sender, EventArgs e) => ApplyZoom(_zoom - ZoomStep);
         private void btnZoomFit_Click(object sender, EventArgs e) => FitZoom();
 
-        private void ApplyZoom(float z, PointF? anchor = null)
+        private void ApplyZoom(float z)
         {
             _zoom = Math.Clamp(z, ZoomMin, ZoomMax);
             UpdateCanvas();
@@ -456,12 +453,9 @@ namespace ALPR
 
         private void pnlCanvas_MouseWheel(object sender, MouseEventArgs e)
         {
-            if ((ModifierKeys & Keys.Control) == Keys.Control)
-            {
-                if (e is HandledMouseEventArgs he) he.Handled = true; // Normal scroll'u durdurur
-                float delta = e.Delta > 0 ? ZoomStep : -ZoomStep;
-                ApplyZoom(_zoom + delta);
-            }
+            if ((ModifierKeys & Keys.Control) != Keys.Control) return;
+            if (e is HandledMouseEventArgs he) he.Handled = true;
+            ApplyZoom(_zoom + (e.Delta > 0 ? ZoomStep : -ZoomStep));
         }
 
         private void UpdateCanvas()
@@ -477,99 +471,66 @@ namespace ALPR
             int w = (int)(_currentImage.Width * _zoom);
             int h = (int)(_currentImage.Height * _zoom);
             picCanvas.Size = new Size(Math.Max(w, pnlCanvas.ClientSize.Width),
-                                      Math.Max(h, pnlCanvas.ClientSize.Height));
+                                          Math.Max(h, pnlCanvas.ClientSize.Height));
             picCanvas.Location = Point.Empty;
             picCanvas.Invalidate();
             lblZoomPct.Text = $"{(int)(_zoom * 100)}%";
         }
 
-        // ─── Coordinate helpers ───────────────────────────────────────────────
+        // ── Coordinate helpers ────────────────────────────────────────────────
 
-        /// Image pixel rect on the canvas at current zoom
-        private RectangleF ImageRect()
-        {
-            if (_currentImage == null) return RectangleF.Empty;
-            return new RectangleF(0, 0, _currentImage.Width * _zoom, _currentImage.Height * _zoom);
-        }
+        private RectangleF ImageRect() =>
+            _currentImage == null
+                ? RectangleF.Empty
+                : new RectangleF(0, 0,
+                      _currentImage.Width * _zoom,
+                      _currentImage.Height * _zoom);
 
-        /// YOLO bbox → canvas rect
         private RectangleF YoloToCanvas(BBoxAnnotation a)
         {
             if (_currentImage == null) return RectangleF.Empty;
             float iw = _currentImage.Width * _zoom;
             float ih = _currentImage.Height * _zoom;
-            float x = (a.Cx - a.W / 2f) * iw;
-            float y = (a.Cy - a.H / 2f) * ih;
-            float w = a.W * iw;
-            float h = a.H * ih;
-            return new RectangleF(x, y, w, h);
+            return new RectangleF(
+                (a.Cx - a.W / 2f) * iw,
+                (a.Cy - a.H / 2f) * ih,
+                a.W * iw, a.H * ih);
         }
 
-        /// Canvas point → YOLO normalize
-        private PointF CanvasToYolo(PointF p)
-        {
-            if (_currentImage == null) return PointF.Empty;
-            return new PointF(
-                p.X / (_currentImage.Width * _zoom),
-                p.Y / (_currentImage.Height * _zoom));
-        }
-
-        /// Canvas rect → BBoxAnnotation
         private BBoxAnnotation RectToAnnotation(RectangleF r, int classId)
         {
             if (_currentImage == null) return new BBoxAnnotation();
             float iw = _currentImage.Width * _zoom;
             float ih = _currentImage.Height * _zoom;
-            // Normalize
-            float cx = (r.Left + r.Width / 2f) / iw;
-            float cy = (r.Top + r.Height / 2f) / ih;
-            float w = r.Width / iw;
-            float h = r.Height / ih;
-            return new BBoxAnnotation { ClassId = classId, Cx = cx, Cy = cy, W = w, H = h };
+            return new BBoxAnnotation
+            {
+                ClassId = classId,
+                Cx = (r.Left + r.Width / 2f) / iw,
+                Cy = (r.Top + r.Height / 2f) / ih,
+                W = r.Width / iw,
+                H = r.Height / ih
+            };
         }
 
-        // ────────────────────────────────────────────────────────────────────
+        // ─────────────────────────────────────────────────────────────────────
         // Paint
-        // ────────────────────────────────────────────────────────────────────
+        // ─────────────────────────────────────────────────────────────────────
 
         private void picCanvas_Paint(object sender, PaintEventArgs e)
         {
             e.Graphics.Clear(Color.DimGray);
-
             if (_currentImage == null) return;
 
             float iw = _currentImage.Width * _zoom;
             float ih = _currentImage.Height * _zoom;
             e.Graphics.DrawImage(_currentImage, 0, 0, iw, ih);
-
             e.Graphics.InterpolationMode = InterpolationMode.NearestNeighbor;
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
 
-            // Draw saved annotations
             for (int i = 0; i < _annotations.Count; i++)
-            {
-                var a = _annotations[i];
-                var rect = YoloToCanvas(a);
-                bool selected = i == _selectedAnnot;
+                DrawAnnotation(e.Graphics, _annotations[i], selected: i == _selectedAnnot);
 
-                using var pen = new Pen(ClassColor(a.ClassId), selected ? 2.5f : 1.5f);
-                using var fill = new SolidBrush(Color.FromArgb(selected ? 50 : 25, ClassColor(a.ClassId)));
-
-                e.Graphics.FillRectangle(fill, rect);
-                e.Graphics.DrawRectangle(pen, rect.X, rect.Y, rect.Width, rect.Height);
-
-                // Class label
-                string lbl = a.ClassId < _classes.Count ? $"{a.ClassId}:{_classes[a.ClassId]}" : $"{a.ClassId}";
-                using var bgBrush = new SolidBrush(Color.FromArgb(180, ClassColor(a.ClassId)));
-                using var font = new Font("Segoe UI", 8, FontStyle.Bold);
-                var sz = e.Graphics.MeasureString(lbl, font);
-                e.Graphics.FillRectangle(bgBrush, rect.X, rect.Y - sz.Height, sz.Width, sz.Height);
-                e.Graphics.DrawString(lbl, font, Brushes.Black, rect.X, rect.Y - sz.Height);
-
-                if (selected) DrawHandles(e.Graphics, rect);
-            }
-
-            // Draw in-progress rectangle
+            // In-progress rectangle
             if (_drawMode == DrawMode.Drawing && _drawRect.Width > 2 && _drawRect.Height > 2)
             {
                 using var dashPen = new Pen(Color.Yellow, 1.5f) { DashStyle = DashStyle.Dash };
@@ -577,89 +538,109 @@ namespace ALPR
             }
         }
 
-        private void DrawHandles(Graphics g, RectangleF r)
+        private void DrawAnnotation(Graphics g, BBoxAnnotation a, bool selected)
         {
-            var handles = GetHandleRects(r);
-            foreach (var h in handles.Values)
-                g.FillRectangle(Brushes.White, h);
-            foreach (var h in handles.Values)
-                g.DrawRectangle(Pens.Black, h.X, h.Y, h.Width, h.Height);
+            var rect = YoloToCanvas(a);
+            var color = ClassColor(a.ClassId);
+
+            using var pen = new Pen(color, selected ? 2.5f : 1.5f);
+            using var fill = new SolidBrush(Color.FromArgb(selected ? 50 : 25, color));
+
+            g.FillRectangle(fill, rect);
+            g.DrawRectangle(pen, rect.X, rect.Y, rect.Width, rect.Height);
+
+            // Label background + text
+            string lbl = a.ClassId < _classes.Count ? $"{a.ClassId}:{_classes[a.ClassId]}" : $"{a.ClassId}";
+            using var font = new Font("Segoe UI", 8, FontStyle.Bold);
+            using var bgBrush = new SolidBrush(Color.FromArgb(180, color));
+            var sz = g.MeasureString(lbl, font);
+            g.FillRectangle(bgBrush, rect.X, rect.Y - sz.Height, sz.Width, sz.Height);
+            g.DrawString(lbl, font, Brushes.Black, rect.X, rect.Y - sz.Height);
+
+            if (selected) DrawHandles(g, rect);
         }
 
-        private Dictionary<Handle, RectangleF> GetHandleRects(RectangleF r)
+        private static void DrawHandles(Graphics g, RectangleF r)
+        {
+            foreach (var h in GetHandleRects(r).Values)
+            {
+                g.FillRectangle(Brushes.White, h);
+                g.DrawRectangle(Pens.Black, h.X, h.Y, h.Width, h.Height);
+            }
+        }
+
+        private static Dictionary<Handle, RectangleF> GetHandleRects(RectangleF r)
         {
             float hs = HandleSize;
-            float halfH = hs / 2f;
+            float half = hs / 2f;
             float cx = r.Left + r.Width / 2f;
             float cy = r.Top + r.Height / 2f;
+
             return new Dictionary<Handle, RectangleF>
             {
-                [Handle.TopLeft] = new(r.Left - halfH, r.Top - halfH, hs, hs),
-                [Handle.TopRight] = new(r.Right - halfH, r.Top - halfH, hs, hs),
-                [Handle.BottomLeft] = new(r.Left - halfH, r.Bottom - halfH, hs, hs),
-                [Handle.BottomRight] = new(r.Right - halfH, r.Bottom - halfH, hs, hs),
-                [Handle.Top] = new(cx - halfH, r.Top - halfH, hs, hs),
-                [Handle.Bottom] = new(cx - halfH, r.Bottom - halfH, hs, hs),
-                [Handle.Left] = new(r.Left - halfH, cy - halfH, hs, hs),
-                [Handle.Right] = new(r.Right - halfH, cy - halfH, hs, hs),
+                [Handle.TopLeft] = new(r.Left - half, r.Top - half, hs, hs),
+                [Handle.TopRight] = new(r.Right - half, r.Top - half, hs, hs),
+                [Handle.BottomLeft] = new(r.Left - half, r.Bottom - half, hs, hs),
+                [Handle.BottomRight] = new(r.Right - half, r.Bottom - half, hs, hs),
+                [Handle.Top] = new(cx - half, r.Top - half, hs, hs),
+                [Handle.Bottom] = new(cx - half, r.Bottom - half, hs, hs),
+                [Handle.Left] = new(r.Left - half, cy - half, hs, hs),
+                [Handle.Right] = new(r.Right - half, cy - half, hs, hs),
             };
         }
 
-        // ────────────────────────────────────────────────────────────────────
+        // ─────────────────────────────────────────────────────────────────────
         // Mouse interaction
-        // ────────────────────────────────────────────────────────────────────
+        // ─────────────────────────────────────────────────────────────────────
 
         private void picCanvas_MouseDown(object sender, MouseEventArgs e)
         {
             if (_currentImage == null || e.Button != MouseButtons.Left) return;
+            pnlCanvas.Focus();
 
-            pnlCanvas.Focus(); // picCanvas.Focus() AutoScroll'ı resetliyordu (scroll zıplaması)
             PointF pt = e.Location;
 
-            // 1. Check selected bbox handles first
+            // 1. Handle resize (selected bbox handles)
             if (_selectedAnnot >= 0 && _selectedAnnot < _annotations.Count)
             {
-                var rect = YoloToCanvas(_annotations[_selectedAnnot]);
-                var handles = GetHandleRects(rect);
+                var handles = GetHandleRects(YoloToCanvas(_annotations[_selectedAnnot]));
                 foreach (var kv in handles)
                 {
-                    if (kv.Value.Contains(pt))
-                    {
-                        _drawMode = DrawMode.Resizing;
-                        _activeHandle = kv.Key;
-                        _originalRect = rect;
-                        _dragStart = pt;
-                        return;
-                    }
+                    if (!kv.Value.Contains(pt)) continue;
+                    _drawMode = DrawMode.Resizing;
+                    _activeHandle = kv.Key;
+                    _originalRect = YoloToCanvas(_annotations[_selectedAnnot]);
+                    _dragStart = pt;
+                    return;
                 }
 
-                // 2. Check if inside selected bbox → move
-                if (rect.Contains(pt))
+                // 2. Move selected bbox
+                var selRect = YoloToCanvas(_annotations[_selectedAnnot]);
+                if (selRect.Contains(pt))
                 {
                     _drawMode = DrawMode.Moving;
                     _dragStart = pt;
-                    _moveOffset = new PointF(pt.X - rect.X, pt.Y - rect.Y);
+                    _moveOffset = new PointF(pt.X - selRect.X, pt.Y - selRect.Y);
                     return;
                 }
             }
 
-            // 3. Check if any other bbox clicked → select it
+            // 3. Click on an unselected bbox → select and start moving
             for (int i = _annotations.Count - 1; i >= 0; i--)
             {
                 var rect = YoloToCanvas(_annotations[i]);
-                if (rect.Contains(pt))
-                {
-                    _selectedAnnot = i;
-                    RefreshAnnotationList();
-                    picCanvas.Invalidate();
-                    _drawMode = DrawMode.Moving;
-                    _dragStart = pt;
-                    _moveOffset = new PointF(pt.X - rect.X, pt.Y - rect.Y);
-                    return;
-                }
+                if (!rect.Contains(pt)) continue;
+
+                _selectedAnnot = i;
+                RefreshAnnotationList();
+                picCanvas.Invalidate();
+                _drawMode = DrawMode.Moving;
+                _dragStart = pt;
+                _moveOffset = new PointF(pt.X - rect.X, pt.Y - rect.Y);
+                return;
             }
 
-            // 4. Start drawing new bbox
+            // 4. Empty canvas → start drawing new bbox
             _selectedAnnot = -1;
             RefreshAnnotationList();
             _drawMode = DrawMode.Drawing;
@@ -671,87 +652,85 @@ namespace ALPR
         {
             if (_currentImage == null) return;
 
-            PointF pt = e.Location;
-            RectangleF imgRect = ImageRect();
+            var imgRect = ImageRect();
+            var pt = new PointF(
+                Math.Clamp(e.X, 0, imgRect.Width),
+                Math.Clamp(e.Y, 0, imgRect.Height));
 
-            // Clamp to image bounds
-            pt.X = Math.Clamp(pt.X, 0, imgRect.Width);
-            pt.Y = Math.Clamp(pt.Y, 0, imgRect.Height);
-
-            if (_drawMode == DrawMode.Drawing)
+            switch (_drawMode)
             {
-                float x = Math.Min(pt.X, _dragStart.X);
-                float y = Math.Min(pt.Y, _dragStart.Y);
-                float w = Math.Abs(pt.X - _dragStart.X);
-                float h = Math.Abs(pt.Y - _dragStart.Y);
-                _drawRect = new RectangleF(x, y, w, h);
-                picCanvas.Invalidate();
-            }
-            else if (_drawMode == DrawMode.Moving && _selectedAnnot >= 0)
-            {
-                var a = _annotations[_selectedAnnot];
-                var rect = YoloToCanvas(a);
-                float newX = pt.X - _moveOffset.X;
-                float newY = pt.Y - _moveOffset.Y;
-                // Clamp
-                newX = Math.Clamp(newX, 0, imgRect.Width - rect.Width);
-                newY = Math.Clamp(newY, 0, imgRect.Height - rect.Height);
-                var newRect = new RectangleF(newX, newY, rect.Width, rect.Height);
-                var newA = RectToAnnotation(newRect, a.ClassId);
-                a.Cx = newA.Cx; a.Cy = newA.Cy;
-                picCanvas.Invalidate();
-            }
-            else if (_drawMode == DrawMode.Resizing && _selectedAnnot >= 0)
-            {
-                var r = _originalRect;
-                float dx = pt.X - _dragStart.X;
-                float dy = pt.Y - _dragStart.Y;
+                case DrawMode.Drawing:
+                    _drawRect = RectangleF.FromLTRB(
+                        Math.Min(pt.X, _dragStart.X), Math.Min(pt.Y, _dragStart.Y),
+                        Math.Max(pt.X, _dragStart.X), Math.Max(pt.Y, _dragStart.Y));
+                    picCanvas.Invalidate();
+                    break;
 
-                float left = r.Left, top = r.Top, right = r.Right, bottom = r.Bottom;
+                case DrawMode.Moving when _selectedAnnot >= 0:
+                    ApplyMove(pt, imgRect);
+                    picCanvas.Invalidate();
+                    break;
 
-                switch (_activeHandle)
-                {
-                    case Handle.TopLeft: left += dx; top += dy; break;
-                    case Handle.TopRight: right += dx; top += dy; break;
-                    case Handle.BottomLeft: left += dx; bottom += dy; break;
-                    case Handle.BottomRight: right += dx; bottom += dy; break;
-                    case Handle.Top: top += dy; break;
-                    case Handle.Bottom: bottom += dy; break;
-                    case Handle.Left: left += dx; break;
-                    case Handle.Right: right += dx; break;
-                }
-
-                // Ensure min size
-                if (right - left < 4) right = left + 4;
-                if (bottom - top < 4) bottom = top + 4;
-
-                // Clamp to image
-                left = Math.Max(0, left);
-                top = Math.Max(0, top);
-                right = Math.Min(imgRect.Width, right);
-                bottom = Math.Min(imgRect.Height, bottom);
-
-                var newRect = RectangleF.FromLTRB(left, top, right, bottom);
-                var a = _annotations[_selectedAnnot];
-                var newA = RectToAnnotation(newRect, a.ClassId);
-                a.Cx = newA.Cx; a.Cy = newA.Cy; a.W = newA.W; a.H = newA.H;
-
-                // Update cursor
-                _annotations[_selectedAnnot] = a;
-                picCanvas.Invalidate();
-                return;
+                case DrawMode.Resizing when _selectedAnnot >= 0:
+                    ApplyResize(pt, imgRect);
+                    picCanvas.Invalidate();
+                    return; // skip cursor update — resize cursors are set in MouseDown
             }
 
-            // Cursor hint for selected bbox
             UpdateCursor(pt);
+        }
+
+        private void ApplyMove(PointF pt, RectangleF imgRect)
+        {
+            var a = _annotations[_selectedAnnot];
+            var rect = YoloToCanvas(a);
+            float x = Math.Clamp(pt.X - _moveOffset.X, 0, imgRect.Width - rect.Width);
+            float y = Math.Clamp(pt.Y - _moveOffset.Y, 0, imgRect.Height - rect.Height);
+            var moved = RectToAnnotation(new RectangleF(x, y, rect.Width, rect.Height), a.ClassId);
+            a.Cx = moved.Cx;
+            a.Cy = moved.Cy;
+        }
+
+        private void ApplyResize(PointF pt, RectangleF imgRect)
+        {
+            float dx = pt.X - _dragStart.X;
+            float dy = pt.Y - _dragStart.Y;
+
+            float left = _originalRect.Left;
+            float top = _originalRect.Top;
+            float right = _originalRect.Right;
+            float bottom = _originalRect.Bottom;
+
+            switch (_activeHandle)
+            {
+                case Handle.TopLeft: left += dx; top += dy; break;
+                case Handle.TopRight: right += dx; top += dy; break;
+                case Handle.BottomLeft: left += dx; bottom += dy; break;
+                case Handle.BottomRight: right += dx; bottom += dy; break;
+                case Handle.Top: top += dy; break;
+                case Handle.Bottom: bottom += dy; break;
+                case Handle.Left: left += dx; break;
+                case Handle.Right: right += dx; break;
+            }
+
+            // Enforce minimum size and clamp to image bounds
+            if (right - left < 4) right = left + 4;
+            if (bottom - top < 4) bottom = top + 4;
+            left = Math.Max(0, left);
+            top = Math.Max(0, top);
+            right = Math.Min(imgRect.Width, right);
+            bottom = Math.Min(imgRect.Height, bottom);
+
+            var a = _annotations[_selectedAnnot];
+            var newA = RectToAnnotation(RectangleF.FromLTRB(left, top, right, bottom), a.ClassId);
+            a.Cx = newA.Cx; a.Cy = newA.Cy; a.W = newA.W; a.H = newA.H;
         }
 
         private void UpdateCursor(PointF pt)
         {
-            if (_selectedAnnot < 0) return;
-            var rect = YoloToCanvas(_annotations[_selectedAnnot]);
-            var handles = GetHandleRects(rect);
+            if (_selectedAnnot < 0) { picCanvas.Cursor = Cursors.Cross; return; }
 
+            var handles = GetHandleRects(YoloToCanvas(_annotations[_selectedAnnot]));
             foreach (var kv in handles)
             {
                 if (!kv.Value.Contains(pt)) continue;
@@ -766,18 +745,19 @@ namespace ALPR
                 return;
             }
 
-            picCanvas.Cursor = rect.Contains(pt) ? Cursors.SizeAll : Cursors.Cross;
+            picCanvas.Cursor = YoloToCanvas(_annotations[_selectedAnnot]).Contains(pt)
+                ? Cursors.SizeAll : Cursors.Cross;
         }
 
         private void picCanvas_MouseUp(object sender, MouseEventArgs e)
         {
             bool modified = false;
+
             if (_drawMode == DrawMode.Drawing)
             {
                 if (_drawRect.Width > 5 && _drawRect.Height > 5)
                 {
-                    var a = RectToAnnotation(_drawRect, SelectedClassId);
-                    _annotations.Add(a);
+                    _annotations.Add(RectToAnnotation(_drawRect, SelectedClassId));
                     _selectedAnnot = _annotations.Count - 1;
                     RefreshAnnotationList();
                     UpdateStatus();
@@ -785,7 +765,7 @@ namespace ALPR
                 }
                 _drawRect = RectangleF.Empty;
             }
-            else if (_drawMode == DrawMode.Moving || _drawMode == DrawMode.Resizing)
+            else if (_drawMode is DrawMode.Moving or DrawMode.Resizing)
             {
                 RefreshAnnotationList();
                 modified = true;
@@ -795,13 +775,12 @@ namespace ALPR
             _activeHandle = Handle.None;
             picCanvas.Invalidate();
 
-            if (modified)
-                SaveCurrentAnnotations();
+            if (modified) SaveCurrentAnnotations();
         }
 
-        // ────────────────────────────────────────────────────────────────────
+        // ─────────────────────────────────────────────────────────────────────
         // Annotation list (right panel)
-        // ────────────────────────────────────────────────────────────────────
+        // ─────────────────────────────────────────────────────────────────────
 
         private bool _suppressAnnotSel = false;
 
@@ -810,7 +789,7 @@ namespace ALPR
             _suppressAnnotSel = true;
             lvAnnotations.BeginUpdate();
 
-            // Sadece gerekiyorsa ekle/sil (tamamen clear yapmaktan kaçınarak flicker'ı önler)
+            // Add / remove items only as needed (avoids flicker from full Clear)
             while (lvAnnotations.Items.Count > _annotations.Count)
                 lvAnnotations.Items.RemoveAt(lvAnnotations.Items.Count - 1);
 
@@ -824,9 +803,9 @@ namespace ALPR
             for (int i = 0; i < _annotations.Count; i++)
             {
                 var a = _annotations[i];
-                string cls = a.ClassId < _classes.Count ? _classes[a.ClassId] : a.ClassId.ToString();
-
+                var cls = a.ClassId < _classes.Count ? _classes[a.ClassId] : a.ClassId.ToString();
                 var item = lvAnnotations.Items[i];
+
                 item.Text = (i + 1).ToString();
                 item.SubItems[1].Text = cls;
                 item.SubItems[2].Text = a.Cx.ToString("F3");
@@ -834,22 +813,19 @@ namespace ALPR
                 item.SubItems[4].Text = a.W.ToString("F3");
                 item.SubItems[5].Text = a.H.ToString("F3");
 
-                Color bgColor = Color.FromArgb(30, ClassColor(a.ClassId));
-                if (item.BackColor != bgColor) item.BackColor = bgColor;
+                var bg = Color.FromArgb(30, ClassColor(a.ClassId));
+                if (item.BackColor != bg) item.BackColor = bg;
             }
 
-            // Seçimi ayarla
             for (int i = 0; i < lvAnnotations.Items.Count; i++)
             {
-                bool shouldBeSelected = (i == _selectedAnnot);
-                if (lvAnnotations.Items[i].Selected != shouldBeSelected)
-                    lvAnnotations.Items[i].Selected = shouldBeSelected;
+                bool sel = i == _selectedAnnot;
+                if (lvAnnotations.Items[i].Selected != sel)
+                    lvAnnotations.Items[i].Selected = sel;
             }
 
             if (_selectedAnnot >= 0 && _selectedAnnot < lvAnnotations.Items.Count)
-            {
                 lvAnnotations.Items[_selectedAnnot].EnsureVisible();
-            }
 
             lvAnnotations.EndUpdate();
             _suppressAnnotSel = false;
@@ -857,13 +833,11 @@ namespace ALPR
 
         private void lvAnnotations_SelectedIndexChanged(object sender, EventArgs e)
         {
-            if (_suppressAnnotSel) return;
-            if (lvAnnotations.SelectedIndices.Count == 0) return;
+            if (_suppressAnnotSel || lvAnnotations.SelectedIndices.Count == 0) return;
             _selectedAnnot = lvAnnotations.SelectedIndices[0];
             picCanvas.Invalidate();
         }
 
-        // ── Delete selected annotation ────────────────────────────────────────
         private void btnDeleteAnnotation_Click(object sender, EventArgs e) => DeleteSelected();
 
         private void DeleteSelected()
@@ -874,26 +848,24 @@ namespace ALPR
             RefreshAnnotationList();
             picCanvas.Invalidate();
             UpdateStatus();
-            SaveCurrentAnnotations(); // Auto-save on deletion
-            
+            SaveCurrentAnnotations();
         }
 
-        // ── Edit selected annotation ──────────────────────────────────────────
         private void btnEditAnnotation_Click(object sender, EventArgs e)
         {
             if (_selectedAnnot < 0 || _selectedAnnot >= _annotations.Count)
             {
-                MessageBox.Show("Lütfen önce bir annotation seçin.", "Uyarı", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("Lütfen önce bir annotation seçin.", "Uyarı",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
-            var a = _annotations[_selectedAnnot];
-            bool changed = ShowAnnotationEditor(a);
-            if (changed)
+
+            if (ShowAnnotationEditor(_annotations[_selectedAnnot]))
             {
                 RefreshAnnotationList();
                 picCanvas.Invalidate();
                 UpdateStatus();
-                SaveCurrentAnnotations(); // Auto-save on edit
+                SaveCurrentAnnotations();
             }
         }
 
@@ -909,7 +881,13 @@ namespace ALPR
                 MinimizeBox = false
             };
 
-            var tbl = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 7, Padding = new Padding(10) };
+            var tbl = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 2,
+                RowCount = 7,
+                Padding = new Padding(10)
+            };
             tbl.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 80));
             tbl.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             for (int i = 0; i < 7; i++) tbl.RowStyles.Add(new RowStyle(SizeType.Absolute, 35));
@@ -933,7 +911,6 @@ namespace ALPR
                 tbl.Controls.Add(new Label { Text = label, TextAlign = ContentAlignment.MiddleRight, Dock = DockStyle.Fill }, 0, row);
                 tbl.Controls.Add(ctrl, 1, row);
             }
-
             AddRow("Class:", cmbEditClass, 0);
             AddRow("Cx:", edCx, 1);
             AddRow("Cy:", edCy, 2);
@@ -941,100 +918,144 @@ namespace ALPR
             AddRow("H:", edH, 4);
 
             var pnlBtn = new Panel { Dock = DockStyle.Fill };
+            btnOk.Dock = DockStyle.Right; btnOk.Width = 90;
+            btnCancel.Dock = DockStyle.Right; btnCancel.Width = 70;
             pnlBtn.Controls.Add(btnCancel);
             pnlBtn.Controls.Add(btnOk);
-            btnOk.Dock = DockStyle.Right;
-            btnOk.Width = 90;
-            btnCancel.Dock = DockStyle.Right;
-            btnCancel.Width = 70;
-
             tbl.Controls.Add(pnlBtn, 0, 6);
             tbl.SetColumnSpan(pnlBtn, 2);
 
             dlg.Controls.Add(tbl);
             dlg.KeyPreview = true;
 
-            if (dlg.ShowDialog(this) == DialogResult.OK)
+            if (dlg.ShowDialog(this) != DialogResult.OK) return false;
+
+            var nfi = System.Globalization.CultureInfo.InvariantCulture;
+            var ns = System.Globalization.NumberStyles.Float;
+            if (!float.TryParse(edCx.Text, ns, nfi, out float cx) |
+                !float.TryParse(edCy.Text, ns, nfi, out float cy) |
+                !float.TryParse(edW.Text, ns, nfi, out float w) |
+                !float.TryParse(edH.Text, ns, nfi, out float h))
             {
-                int cls = cmbEditClass.SelectedIndex;
-
-                var nfi = System.Globalization.CultureInfo.InvariantCulture;
-                var ns = System.Globalization.NumberStyles.Float;
-                float cx = 0, cy = 0, w = 0, h = 0;
-                bool okCx = float.TryParse(edCx.Text, ns, nfi, out cx);
-                bool okCy = float.TryParse(edCy.Text, ns, nfi, out cy);
-                bool okW = float.TryParse(edW.Text, ns, nfi, out w);
-                bool okH = float.TryParse(edH.Text, ns, nfi, out h);
-                bool ok = okCx & okCy & okW & okH;
-
-                if (!ok) { MessageBox.Show("Geçersiz sayısal değer.", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error); return false; }
-
-                // Clamp 0-1
-                a.ClassId = cls;
-                a.Cx = Math.Clamp(cx, 0f, 1f);
-                a.Cy = Math.Clamp(cy, 0f, 1f);
-                a.W = Math.Clamp(w, 0f, 1f);
-                a.H = Math.Clamp(h, 0f, 1f);
-                return true;
+                MessageBox.Show("Geçersiz sayısal değer.", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
             }
-            return false;
+
+            a.ClassId = cmbEditClass.SelectedIndex;
+            a.Cx = Math.Clamp(cx, 0f, 1f);
+            a.Cy = Math.Clamp(cy, 0f, 1f);
+            a.W = Math.Clamp(w, 0f, 1f);
+            a.H = Math.Clamp(h, 0f, 1f);
+            return true;
         }
 
-        // ── Save now button ───────────────────────────────────────────────────
-        private void btnSaveNow_Click(object sender, EventArgs e)
+        private void btnSaveNow_Click(object sender, EventArgs e) => SaveCurrentAnnotations();
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Auto-Label
+        // ─────────────────────────────────────────────────────────────────────
+
+        private ALPR.Detection.LicensePlateDetector? _detectorV1;
+        private string _detectorPathV1 = "";
+        private const string DefaultModelV1 = "models/LicencePlateDetection_Gpu.onnx";
+
+        private YoloOnnxRunner.PlateRecognitionModel? _detectorV2;
+        private string _detectorPathV2 = "";
+        private const string DefaultModelV2 = "models/plateReconitionV2.onnx";
+
+        private bool _useV2Model = true;
+
+        /// <summary>
+        /// Model bu eşiğin üzerinde bir güvenle farklı bir sınıf tahmin ediyorsa,
+        /// cmbClass seçimini geçersiz kılıp kendi tahminini kullanır.
+        /// </summary>
+        private const float ClassOverrideThreshold = 0.98f;
+
+        private bool EnsureDetector()
         {
-            SaveCurrentAnnotations();
+            bool loaded = _useV2Model
+                ? EnsureModel(ref _detectorPathV2, DefaultModelV2, "Plaka Tespit Modeli (V2)",
+                      path => new YoloOnnxRunner.PlateRecognitionModel(path, useGpu: true),
+                      ref _detectorV2)
+                : EnsureModel(ref _detectorPathV1, DefaultModelV1, "Plaka Tespit Modeli",
+                      path => new ALPR.Detection.LicensePlateDetector(path, useGpu: false),
+                      ref _detectorV1);
+
+            if (loaded && _useV2Model && _detectorV2?.ClassLabels != null)
+            {
+                SyncClassesFromModel(_detectorV2.ClassLabels);
+            }
+
+            return loaded;
         }
 
-        // ────────────────────────────────────────────────────────────────────
-        // Auto-Label (LicensePlateDetector)
-        // ────────────────────────────────────────────────────────────────────
-
-        // Detector is lazy-loaded; path is persisted across images
-        private ALPR.Detection.LicensePlateDetector? _autoDetector;
-        private string _autoDetectorPath = "";
-        private const string DefaultDetectorModel = "models/LicencePlateDetection_Gpu.onnx";
-
-        private ALPR.Detection.LicensePlateDetector? EnsureDetector()
+        private void SyncClassesFromModel(List<string> labels)
         {
-            // Try default path if not yet chosen
-            if (_autoDetectorPath == "")
-                _autoDetectorPath = DefaultDetectorModel;
+            bool changed = false;
+            for (int i = 0; i < labels.Count; i++)
+            {
+                string label = labels[i];
+                if (string.IsNullOrWhiteSpace(label)) continue;
 
-            // Model dosyası yoksa kullanıcıdan seç
-            if (!File.Exists(_autoDetectorPath))
+                if (i < _classes.Count)
+                {
+                    // Eğer mevcut sınıf ismi "class_N" gibi geçici bir isimse veya boşsa güncelle
+                    if (_classes[i].StartsWith("class_") || _classes[i] == "plate" && label != "plate")
+                    {
+                        _classes[i] = label;
+                        changed = true;
+                    }
+                }
+                else
+                {
+                    _classes.Add(label);
+                    changed = true;
+                }
+            }
+
+            if (changed)
+            {
+                RefreshClassCombo();
+            }
+        }
+
+        private bool EnsureModel<T>(
+            ref string path, string defaultPath, string dialogTitle,
+            Func<string, T> factory, ref T? instance) where T : class
+        {
+            if (path == "") path = defaultPath;
+
+            if (!File.Exists(path))
             {
                 using var ofd = new OpenFileDialog
                 {
-                    Title = "Plaka Tespit Modeli Seçin",
+                    Title = dialogTitle + " Seçin",
                     Filter = "ONNX Model|*.onnx|Tüm Dosyalar|*.*",
                     InitialDirectory = Path.Combine(Directory.GetCurrentDirectory(), "models")
                 };
-                if (ofd.ShowDialog(this) != DialogResult.OK) return null;
-                _autoDetectorPath = ofd.FileName;
+                if (ofd.ShowDialog(this) != DialogResult.OK) return false;
+                path = ofd.FileName;
             }
 
-            // Zaten yüklü ve aynı dosyaysa tekrar yükleme
-            if (_autoDetector != null) return _autoDetector;
+            if (instance != null) return true;
 
             try
             {
-                lblStatus.Text = "🔧 Model yükleniyor...";
+                lblStatus.Text = $"🔧 {dialogTitle} yükleniyor...";
                 Application.DoEvents();
-
-                _autoDetector = new ALPR.Detection.LicensePlateDetector(_autoDetectorPath, useGpu: false);
-                lblSaved.Text = "✓ Model yüklendi";
+                instance = factory(path);
+                lblSaved.Text = $"✓ {dialogTitle} yüklendi";
                 lblSaved.ForeColor = Color.Green;
+                return true;
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Model yüklenemedi:\n{ex.Message}", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                _autoDetectorPath = "";
-                _autoDetector = null;
-                return null;
+                MessageBox.Show($"{dialogTitle} yüklenemedi:\n{ex.Message}", "Hata",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                path = "";
+                instance = null;
+                return false;
             }
-
-            return _autoDetector;
         }
 
         private void btnAutoLabel_Click(object sender, EventArgs e)
@@ -1044,11 +1065,9 @@ namespace ALPR
                 MessageBox.Show("Önce bir resim yükleyin.", "Uyarı", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
+            if (!EnsureDetector()) return;
 
-            var detector = EnsureDetector();
-            if (detector == null) return;
-
-            AutoLabelImage(_currentImage, confirmOverwrite: true);
+            AutoLabelCurrentImage(confirmOverwrite: true);
             RefreshAnnotationList();
             picCanvas.Invalidate();
             UpdateStatus();
@@ -1062,23 +1081,20 @@ namespace ALPR
                 MessageBox.Show("Önce bir klasör seçin.", "Uyarı", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
+            if (!EnsureDetector()) return;
 
-            var detector = EnsureDetector();
-            if (detector == null) return;
-
-            var res = MessageBox.Show(
+            var confirm = MessageBox.Show(
                 $"{_imageFiles.Count} resim otomatik etiketlenecek.\n" +
                 "Var olan annotation'lar korunacak (tespit edilenler eklenecek).\n\nDevam?",
                 "Tümünü Otomatik Etiketle",
                 MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            if (confirm != DialogResult.Yes) return;
 
-            if (res != DialogResult.Yes) return;
-
-            // Önce mevcut resmi kaydet
             SaveCurrentAnnotations();
 
             int capturedClassId = SelectedClassId;
             int totalAdded = 0;
+
             pbAutoLabel.Visible = true;
             pbAutoLabel.Maximum = _imageFiles.Count;
             pbAutoLabel.Value = 0;
@@ -1093,40 +1109,20 @@ namespace ALPR
                 {
                     using var fs = new FileStream(_imageFiles[i], FileMode.Open, FileAccess.Read);
                     using var temp = new Bitmap(fs);
-                    using var bmp = new Bitmap(temp); // Kilitlenmeyi önler
+                    using var bmp = new Bitmap(temp);
 
-                    string fname = GetDatasetRelativePath(_imageFiles[i]);
-
-                    // Dataset'teki mevcut annotation'ları yükle
+                    string fname = DatasetRelativePath(_imageFiles[i]);
                     var entry = _dataset.Images.FirstOrDefault(e => e.File == fname);
-                    var existingAnnots = entry != null
-                        ? entry.Annotations.Boxes.Select(b => new BBoxAnnotation
-                        {
-                            ClassId = (int)b[0],
-                            Cx = b[1],
-                            Cy = b[2],
-                            W = b[3],
-                            H = b[4]
-                        }).ToList()
-                        : new List<BBoxAnnotation>();
+                    var existAnnots = ParseAnnotations(entry);
 
-                    int added = RunDetectorOnBitmap(bmp, existingAnnots, appendOnly: true, classId: capturedClassId);
-                    totalAdded += added;
+                    totalAdded += RunDetector(bmp, existAnnots, classId: capturedClassId);
 
-                    // Dataset'e yaz
                     if (entry == null)
                     {
-                        entry = new ImageEntry
-                        {
-                            File = fname,
-                            Width = bmp.Width,
-                            Height = bmp.Height
-                        };
+                        entry = new ImageEntry { File = fname, Width = bmp.Width, Height = bmp.Height };
                         _dataset.Images.Add(entry);
                     }
-                    entry.Annotations.Boxes = existingAnnots
-                        .Select(a => new float[] { a.ClassId, a.Cx, a.Cy, a.W, a.H })
-                        .ToList();
+                    entry.Annotations.Boxes = SerializeAnnotations(existAnnots);
                 }
                 catch (Exception ex)
                 {
@@ -1137,177 +1133,154 @@ namespace ALPR
 
             SaveDataset();
 
-            // Şu an açık resmi yeniden yükle (annotation'lar güncellenmiş olabilir)
+            // Reload current image in case its annotations changed
             if (_currentIndex >= 0)
             {
-                string curFile = GetDatasetRelativePath(_imageFiles[_currentIndex]);
-                var curEntry = _dataset.Images.FirstOrDefault(e => e.File == curFile);
-                _annotations = curEntry != null
-                    ? curEntry.Annotations.Boxes.Select(b => new BBoxAnnotation
-                    {
-                        ClassId = (int)b[0],
-                        Cx = b[1],
-                        Cy = b[2],
-                        W = b[3],
-                        H = b[4]
-                    }).ToList()
-                    : new List<BBoxAnnotation>();
-
+                string curFile = DatasetRelativePath(_imageFiles[_currentIndex]);
+                _annotations = ParseAnnotations(_dataset.Images.FirstOrDefault(e => e.File == curFile));
                 RefreshAnnotationList();
                 picCanvas.Invalidate();
             }
 
             pbAutoLabel.Visible = false;
-
             UpdateStatus();
             MessageBox.Show(
                 $"Tamamlandı! {_imageFiles.Count} resim işlendi, toplam {totalAdded} yeni bbox eklendi.",
                 "Otomatik Etiketleme Bitti", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
-        /// <summary>
-        /// Mevcut açık resme detector çalıştırır. confirmOverwrite=true ise var olan annotation varsa sorar.
-        /// </summary>
-        private void AutoLabelImage(Bitmap bmp, bool confirmOverwrite)
+        private void AutoLabelCurrentImage(bool confirmOverwrite)
         {
             if (confirmOverwrite && _annotations.Count > 0)
             {
                 var res = MessageBox.Show(
                     $"Bu resimde zaten {_annotations.Count} annotation var.\n" +
-                    "Tespit edilen yeni bbox'lar mevcut olanların üzerine mi eklensin?\n\n" +
                     "[Evet] = Ekle (var olanları koru)\n[Hayır] = Hepsini sil, sadece yenileri ekle",
                     "Annotation Mevcut", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
-
                 if (res == DialogResult.Cancel) return;
                 if (res == DialogResult.No) _annotations.Clear();
             }
-
-            RunDetectorOnBitmap(bmp, _annotations, appendOnly: true);
+            RunDetector(_currentImage!, _annotations);
         }
 
         /// <summary>
-        /// Detector çalıştırır, class 0 (plate) olarak tespit edilen bbox'ları annotations listesine ekler.
-        /// Geri dönüş: eklenen bbox sayısı.
+        /// Runs the active detector on a bitmap and appends non-duplicate detections.
+        /// Returns the number of annotations added.
         /// </summary>
-        private int RunDetectorOnBitmap(Bitmap bmp, List<BBoxAnnotation> annotations, bool appendOnly, int classId = -1)
+        private int RunDetector(Bitmap bmp, List<BBoxAnnotation> target, int classId = -1)
         {
-            if (_autoDetector == null) return 0;
-
             if (classId < 0) classId = SelectedClassId;
 
-            // OnnxRuntime Format24bppRgb bekler; diğer formatları dönüştür
-            Bitmap inputBmp;
-            bool needsDispose = false;
-            if (bmp.PixelFormat != System.Drawing.Imaging.PixelFormat.Format24bppRgb)
-            {
-                inputBmp = new Bitmap(bmp.Width, bmp.Height,
-                                          System.Drawing.Imaging.PixelFormat.Format24bppRgb);
-                needsDispose = true;
-                using var g = Graphics.FromImage(inputBmp);
-                g.DrawImage(bmp, 0, 0, bmp.Width, bmp.Height);
-            }
-            else
-            {
-                inputBmp = bmp;
-            }
+            // OnnxRuntime requires Format24bppRgb
+            bool mustDispose = bmp.PixelFormat != System.Drawing.Imaging.PixelFormat.Format24bppRgb;
+            Bitmap input = mustDispose
+                ? ConvertTo24bpp(bmp) : bmp;
 
             try
             {
-                var result = _autoDetector.Detect(inputBmp, 0.35f, true, 0.45f);
-                if (result.Detections.Count == 0) return 0;
-
-                int added = 0;
-                foreach (var det in result.Detections)
-                {
-                    // Piksel → YOLO normalize
-                    float cx = (det.X + det.Width / 2f) / inputBmp.Width;
-                    float cy = (det.Y + det.Height / 2f) / inputBmp.Height;
-                    float w = det.Width / (float)inputBmp.Width;
-                    float h = det.Height / (float)inputBmp.Height;
-
-                    cx = Math.Clamp(cx, 0f, 1f);
-                    cy = Math.Clamp(cy, 0f, 1f);
-                    w = Math.Clamp(w, 0f, 1f);
-                    h = Math.Clamp(h, 0f, 1f);
-
-                    // Duplicate kontrolü: mevcut annotation'larla örtüşüyorsa (IoU > 0.5) ekleme
-                    bool duplicate = annotations.Any(a =>
-                    {
-                        float iou = ComputeIoU(a.Cx, a.Cy, a.W, a.H, cx, cy, w, h);
-                        return iou > 0.5f;
-                    });
-
-                    if (!duplicate)
-                    {
-                        annotations.Add(new BBoxAnnotation
-                        {
-                            ClassId = classId,
-                            Cx = cx,
-                            Cy = cy,
-                            W = w,
-                            H = h
-                        });
-                        added++;
-                    }
-                }
-                return added;
+                return _useV2Model
+                    ? AppendDetectionsV2(input, target, classId)
+                    : AppendDetectionsV1(input, target, classId);
             }
             finally
             {
-                if (needsDispose) inputBmp.Dispose();
+                if (mustDispose) input.Dispose();
             }
         }
 
-        private static float ComputeIoU(float cx1, float cy1, float w1, float h1,
-                                         float cx2, float cy2, float w2, float h2)
+        private static Bitmap ConvertTo24bpp(Bitmap src)
         {
-            float x1l = cx1 - w1 / 2f, x1r = cx1 + w1 / 2f;
-            float y1t = cy1 - h1 / 2f, y1b = cy1 + h1 / 2f;
-            float x2l = cx2 - w2 / 2f, x2r = cx2 + w2 / 2f;
-            float y2t = cy2 - h2 / 2f, y2b = cy2 + h2 / 2f;
+            var dst = new Bitmap(src.Width, src.Height, System.Drawing.Imaging.PixelFormat.Format24bppRgb);
+            using var g = Graphics.FromImage(dst);
+            g.DrawImage(src, 0, 0, src.Width, src.Height);
+            return dst;
+        }
 
-            float ix = Math.Max(0, Math.Min(x1r, x2r) - Math.Max(x1l, x2l));
-            float iy = Math.Max(0, Math.Min(y1b, y2b) - Math.Max(y1t, y2t));
+        private int AppendDetectionsV2(Bitmap bmp, List<BBoxAnnotation> target, int classId)
+        {
+            var detections = _detectorV2!.Predict(bmp);
+            int added = 0;
+
+            foreach (var det in detections)
+            {
+                // V2 modelde ülke sınıfı doğrudan çıktıda geliyor.
+                // Geçerli bir class id döndüyse doğrudan onu kullan.
+                int finalClass = det.ClassId >= 0 ? det.ClassId : classId;
+
+                var annot = NormalizeDetection(det.Box, bmp.Width, bmp.Height, finalClass);
+                if (!IsDuplicate(annot, target)) { target.Add(annot); added++; }
+            }
+
+            return added;
+        }
+
+        private int AppendDetectionsV1(Bitmap bmp, List<BBoxAnnotation> target, int classId)
+        {
+            var result = _detectorV1!.Detect(bmp, 0.35f, true, 0.45f);
+            int added = 0;
+
+            foreach (var det in result.Detections)
+            {
+                var annot = NormalizeDetection(
+                    new RectangleF(det.X, det.Y, det.Width, det.Height),
+                    bmp.Width, bmp.Height, classId);
+                if (!IsDuplicate(annot, target)) { target.Add(annot); added++; }
+            }
+
+            return added;
+        }
+
+        private static BBoxAnnotation NormalizeDetection(RectangleF box, int imgW, int imgH, int classId) =>
+            new BBoxAnnotation
+            {
+                ClassId = classId,
+                Cx = Math.Clamp((box.X + box.Width / 2f) / imgW, 0f, 1f),
+                Cy = Math.Clamp((box.Y + box.Height / 2f) / imgH, 0f, 1f),
+                W = Math.Clamp(box.Width / imgW, 0f, 1f),
+                H = Math.Clamp(box.Height / imgH, 0f, 1f)
+            };
+
+        private static bool IsDuplicate(BBoxAnnotation candidate, List<BBoxAnnotation> existing) =>
+            existing.Any(a => YoloIoU(a, candidate) > 0.5f);
+
+        private static float YoloIoU(BBoxAnnotation a, BBoxAnnotation b)
+        {
+            float ax1 = a.Cx - a.W / 2f, ax2 = a.Cx + a.W / 2f;
+            float ay1 = a.Cy - a.H / 2f, ay2 = a.Cy + a.H / 2f;
+            float bx1 = b.Cx - b.W / 2f, bx2 = b.Cx + b.W / 2f;
+            float by1 = b.Cy - b.H / 2f, by2 = b.Cy + b.H / 2f;
+
+            float ix = Math.Max(0, Math.Min(ax2, bx2) - Math.Max(ax1, bx1));
+            float iy = Math.Max(0, Math.Min(ay2, by2) - Math.Max(ay1, by1));
             float inter = ix * iy;
-            if (inter <= 0) return 0f;
-
-            float union = w1 * h1 + w2 * h2 - inter;
+            float union = a.W * a.H + b.W * b.H - inter;
             return union <= 0 ? 0f : inter / union;
         }
 
-
-
-        // ────────────────────────────────────────────────────────────────────
-        // Keyboard shortcuts
-        // ────────────────────────────────────────────────────────────────────
+        // ─────────────────────────────────────────────────────────────────────
+        // Plate list & label clearing
+        // ─────────────────────────────────────────────────────────────────────
 
         private void btnPlateList_Click(object sender, EventArgs e)
         {
             if (_dataset == null || string.IsNullOrEmpty(_folderPath) || string.IsNullOrEmpty(_datasetPath))
             {
                 MessageBox.Show("Lütfen önce veri seti klasörünü seçin.", "Uyarı",
-                                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
             SaveCurrentAnnotations();
 
+            // Try to infer the active class from the folder name
             string folderName = new DirectoryInfo(_folderPath).Name;
-            int activeClassId = _classes.FindIndex(c => folderName.IndexOf(c, StringComparison.OrdinalIgnoreCase) >= 0);
-            if (activeClassId == -1)
-            {
-                activeClassId = _classes.FindIndex(c => c.IndexOf(folderName, StringComparison.OrdinalIgnoreCase) >= 0);
-            }
-            if (activeClassId == -1)
-            {
-                activeClassId = cmbClass.SelectedIndex;
-            }
+            int activeClass = _classes.FindIndex(c => folderName.IndexOf(c, StringComparison.OrdinalIgnoreCase) >= 0);
+            if (activeClass < 0) activeClass = _classes.FindIndex(c => c.IndexOf(folderName, StringComparison.OrdinalIgnoreCase) >= 0);
+            if (activeClass < 0) activeClass = cmbClass.SelectedIndex;
 
-            using var frm = new FullPlateList(_folderPath, _dataset, _datasetPath, _classes, activeClassId);
+            using var frm = new FullPlateList(_folderPath, _dataset, _datasetPath, _classes, activeClass);
             frm.ShowDialog(this);
-            
-            // Plaka listesinde değişiklik yapılmış olabilir, mevcut resmi yeniden yükle
-            LoadCurrentImage();
+            LoadCurrentImage(); // Reload in case the list form made changes
         }
 
         private void btnTemizle_Click(object sender, EventArgs e)
@@ -1315,84 +1288,77 @@ namespace ALPR
             if (string.IsNullOrEmpty(_folderPath) || _dataset == null || _imageFiles.Count == 0) return;
 
             string folderName = new DirectoryInfo(_folderPath).Name;
-            var result = MessageBox.Show(
-                $"Dikkat: Sadece şu an seçili olan '{folderName}' klasöründeki MECUT TÜM ETİKETLER kalıcı olarak silinecek.\n\nOnaylıyor musunuz?",
-                "Klasör Etiketlerini Temizle",
-                MessageBoxButtons.YesNo,
-                MessageBoxIcon.Warning);
+            if (MessageBox.Show(
+                    $"Dikkat: '{folderName}' klasöründeki TÜM ETİKETLER kalıcı olarak silinecek.\n\nOnaylıyor musunuz?",
+                    "Klasör Etiketlerini Temizle",
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
 
-            if (result != DialogResult.Yes) return;
-
-            int clearedCount = 0;
-
+            int cleared = 0;
             foreach (var imgFile in _imageFiles)
             {
-                string relPath = GetDatasetRelativePath(imgFile);
-                var entry = _dataset.Images.FirstOrDefault(x => x.File == relPath);
-                
-                if (entry != null && entry.Annotations?.Boxes != null && entry.Annotations.Boxes.Count > 0)
+                var entry = _dataset.Images.FirstOrDefault(x => x.File == DatasetRelativePath(imgFile));
+                if (entry?.Annotations?.Boxes?.Count > 0)
                 {
-                    clearedCount += entry.Annotations.Boxes.Count;
+                    cleared += entry.Annotations.Boxes.Count;
                     entry.Annotations.Boxes.Clear();
                 }
             }
 
-            // Şu an açık olan ekranı da temizle
-            if (_currentImage != null)
-            {
-                _annotations.Clear();
-                _selectedAnnot = -1;
-                RefreshAnnotationList();
-                picCanvas.Invalidate();
-                UpdateStatus();
-            }
-
+            _annotations.Clear();
+            _selectedAnnot = -1;
+            RefreshAnnotationList();
+            picCanvas.Invalidate();
+            UpdateStatus();
             SaveDataset();
 
-            MessageBox.Show($"Toplam {clearedCount} adet etiket silindi.", "İşlem Tamam", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show($"Toplam {cleared} adet etiket silindi.", "İşlem Tamam",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Keyboard shortcuts
+        // ─────────────────────────────────────────────────────────────────────
 
         private void ImageLabeling_KeyDown(object sender, KeyEventArgs e)
         {
-            if (e.KeyCode == Keys.Delete || e.KeyCode == Keys.Back)
-            {
-                DeleteSelected();
-                e.Handled = true;
-                return;
-            }
-
             switch (e.KeyCode)
             {
+                case Keys.Delete:
+                case Keys.Back:
+                    DeleteSelected(); e.Handled = true; break;
+
                 case Keys.Left: Navigate(-1); e.Handled = true; break;
                 case Keys.Right: Navigate(+1); e.Handled = true; break;
 
                 case Keys.Add:
-                case Keys.Oemplus: ApplyZoom(_zoom + ZoomStep); e.Handled = true; break;
+                case Keys.Oemplus:
+                    ApplyZoom(_zoom + ZoomStep); e.Handled = true; break;
 
                 case Keys.Subtract:
-                case Keys.OemMinus: ApplyZoom(_zoom - ZoomStep); e.Handled = true; break;
+                case Keys.OemMinus:
+                    ApplyZoom(_zoom - ZoomStep); e.Handled = true; break;
 
                 case Keys.D0 when e.Control: FitZoom(); e.Handled = true; break;
-
                 case Keys.S when e.Control: SaveCurrentAnnotations(); e.Handled = true; break;
             }
         }
 
-        // ────────────────────────────────────────────────────────────────────
+        // ─────────────────────────────────────────────────────────────────────
         // Form closing
-        // ────────────────────────────────────────────────────────────────────
+        // ─────────────────────────────────────────────────────────────────────
 
         private void ImageLabeling_FormClosing(object sender, FormClosingEventArgs e)
         {
             _thumbCts?.Cancel();
             SaveCurrentAnnotations();
             _currentImage?.Dispose();
-            _autoDetector?.Dispose();
+            _detectorV1?.Dispose();
+            _detectorV2?.Dispose();
         }
 
-        // ────────────────────────────────────────────────────────────────────
+        // ─────────────────────────────────────────────────────────────────────
         // Utility
-        // ────────────────────────────────────────────────────────────────────
+        // ─────────────────────────────────────────────────────────────────────
 
         private static string? PromptInput(string message, string title)
         {
@@ -1414,57 +1380,5 @@ namespace ALPR
             dlg.Controls.AddRange(new Control[] { lbl, txt, ok, ca });
             return dlg.ShowDialog() == DialogResult.OK ? txt.Text : null;
         }
-    } // End of Form
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Data models
-    // ─────────────────────────────────────────────────────────────────────────
-
-    public class BBoxAnnotation
-    {
-        public int ClassId { get; set; }
-        public float Cx { get; set; }   // YOLO normalize 0-1
-        public float Cy { get; set; }
-        public float W { get; set; }
-        public float H { get; set; }
-    }
-
-    public class ImageEntry
-    {
-        [JsonPropertyName("type")]
-        public string Type { get; set; } = "image";
-
-        [JsonPropertyName("file")]
-        public string File { get; set; } = "";
-
-        [JsonPropertyName("url")]
-        public string Url { get; set; } = "";
-
-        [JsonPropertyName("width")]
-        public int Width { get; set; }
-
-        [JsonPropertyName("height")]
-        public int Height { get; set; }
-
-        [JsonPropertyName("split")]
-        public string Split { get; set; } = "train";
-
-        [JsonPropertyName("annotations")]
-        public AnnotationBlock Annotations { get; set; } = new();
-    }
-
-    public class AnnotationBlock
-    {
-        [JsonPropertyName("boxes")]
-        public List<float[]> Boxes { get; set; } = new();
-    }
-
-    public class DatasetRoot
-    {
-        [JsonPropertyName("classes")]
-        public List<string> Classes { get; set; } = new();
-
-        [JsonPropertyName("images")]
-        public List<ImageEntry> Images { get; set; } = new();
     }
 }

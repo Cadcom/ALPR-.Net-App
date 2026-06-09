@@ -1,12 +1,14 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using Microsoft.ML.OnnxRuntime;
-using Microsoft.ML.OnnxRuntime.Tensors;
 using OpenCvSharp;
 
 namespace ALPR.Detection
 {
+    public class PlateCharDetail
+    {
+        public char Character { get; set; }
+        public float Confidence { get; set; }
+    }
+
     public class TitanV8ModelResult
     {
         public string Text { get; set; } = string.Empty;
@@ -26,19 +28,15 @@ namespace ALPR.Detection
     public class TitanArmorV8Detector : IDisposable
     {
         private readonly InferenceSession _session;
+        private readonly string _inputName;
+        private readonly string[] _outputNames;
+
+        private readonly CLAHE _clahe;
 
         // ── Model sabitleri ──────────────────────────────────────────────────────
-        private const int ImgW = 128;
+        private const int ImgW = 192;
         private const int ImgH = 96;
-        private const int MaxLabelLen = 16;
-
-        // Slot head: VocabularyProjection → softmax → vocab_size sınıf
-        private const int SlotVocab = 37;
-
-        // CTC head: LogSoftmaxHead → log_softmax → vocab_size+1 sınıf, blank=son index
-        private const int CtcVocab = 38;
-        private const int CtcBlank = 37;
-
+        private const int MaxLabelLen = 12;
         private const int PadIdx = 0; // index 0 = boşluk / padding
 
         // ── Eşik değerleri ──────────────────────────────────────────────────────
@@ -94,15 +92,17 @@ namespace ALPR.Detection
 
         public TitanArmorV8Detector(string modelPath, bool useGpu = false)
         {
-            var options = new SessionOptions
-            {
-                GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL
-            };
-            if (useGpu)
-            {
-                try { options.AppendExecutionProvider_CUDA(0); } catch { }
-            }
+            var options = useGpu
+                ? ExecutionProviderHelper.CreateOptimizedSessionOptions(true)
+                : new SessionOptions
+                {
+                    GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL
+                };
+
             _session = new InferenceSession(modelPath, options);
+            _inputName = _session.InputMetadata.Keys.First();
+            _outputNames = _session.OutputMetadata.Keys.ToArray();
+            _clahe = Cv2.CreateCLAHE(2.5, new OpenCvSharp.Size(8, 8));
         }
 
         public TitanV8ModelResult Predict(Mat inputMat)
@@ -114,17 +114,72 @@ namespace ALPR.Detection
 
             using var outputs = _session.Run(
                 new RunOptions(),
-                new Dictionary<string, OrtValue> { ["v8_image"] = inputVal },
-                new[] { "slot_head", "ctc_head" });
+                new Dictionary<string, OrtValue> { [_inputName] = inputVal },
+                _outputNames);
 
-            var slotSpan = outputs[0].GetTensorDataAsSpan<float>();
-            var ctcSpan = outputs[1].GetTensorDataAsSpan<float>();
-            int seqLen = (int)outputs[1].GetTensorTypeAndShape().Shape[1];
+            // Model outputs'un her zaman en az 2 çıktısı var (slot_head, ctc_head)
+            // Ama adlar değişebilir, bu yüzden index ile erişiyoruz
+            if (outputs.Count < 2)
+                throw new InvalidOperationException($"Model expected 2 outputs, got {outputs.Count}");
 
-            var slot = DecodeSlot(slotSpan);
-            var ctc = DecodeCTC(ctcSpan, seqLen);
+            var slotOutput = FindOutputByHead(outputs, _outputNames, "slot");
+            var ctcOutput = FindOutputByHead(outputs, _outputNames, "ctc");
+
+            var slotShape = slotOutput.GetTensorTypeAndShape().Shape;
+            var ctcShape = ctcOutput.GetTensorTypeAndShape().Shape;
+            ValidateShape(slotShape, "slot");
+            ValidateShape(ctcShape, "ctc");
+
+            int slotSeqLen = Math.Min((int)slotShape[1], MaxLabelLen);
+            int slotVocab = (int)slotShape[2];
+            int ctcSeqLen = (int)ctcShape[1];
+            int ctcVocab = (int)ctcShape[2];
+
+            var slotSpan = slotOutput.GetTensorDataAsSpan<float>();
+            var ctcSpan = ctcOutput.GetTensorDataAsSpan<float>();
+
+            var slot = DecodeSlot(slotSpan, slotSeqLen, slotVocab);
+            var ctc = DecodeCTC(ctcSpan, ctcSeqLen, ctcVocab);
 
             return ChoosePrediction(slot, ctc);
+        }
+
+        private static OrtValue FindOutputByHead(IDisposableReadOnlyCollection<OrtValue> outputs, string[] outputNames, string headName)
+        {
+            int byNameIndex = Array.FindIndex(outputNames, n =>
+                n.Contains(headName, StringComparison.OrdinalIgnoreCase));
+            if (byNameIndex >= 0 && byNameIndex < outputs.Count)
+                return outputs[byNameIndex];
+
+            // İsim yoksa shape'ten tahmin:
+            // slot: genelde seq kısa (12-16), ctc: seq daha uzun (örn. 48/64/96/128)
+            int candidateIdx = -1;
+            long bestScore = long.MinValue;
+            for (int i = 0; i < outputs.Count; i++)
+            {
+                var shape = outputs[i].GetTensorTypeAndShape().Shape;
+                if (shape.Length < 3)
+                    continue;
+
+                long seq = shape[1];
+                long score = headName.Equals("slot", StringComparison.OrdinalIgnoreCase) ? -seq : seq;
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    candidateIdx = i;
+                }
+            }
+
+            if (candidateIdx < 0)
+                throw new InvalidOperationException($"Could not locate '{headName}' output.");
+
+            return outputs[candidateIdx];
+        }
+
+        private static void ValidateShape(long[] shape, string head)
+        {
+            if (shape.Length < 3 || shape[1] <= 0 || shape[2] <= 0)
+                throw new InvalidOperationException($"Invalid {head} output shape: [{string.Join(", ", shape)}]");
         }
 
         // ── Ön işlem ─────────────────────────────────────────────────────────────
@@ -138,8 +193,8 @@ namespace ALPR.Detection
                 img.CopyTo(gray);
 
             using var clahed = new Mat();
-            using var clahe = Cv2.CreateCLAHE(2.5, new OpenCvSharp.Size(8, 8));
-            clahe.Apply(gray, clahed);
+            //using var clahe = Cv2.CreateCLAHE(2.5, new OpenCvSharp.Size(8, 8));
+            _clahe.Apply(gray, clahed);
 
             double ratio = Math.Min((double)ImgW / clahed.Cols, (double)ImgH / clahed.Rows);
             int newW = Math.Max(1, (int)Math.Round(clahed.Cols * ratio));
@@ -177,18 +232,19 @@ namespace ALPR.Detection
         // Çıktı doğrudan olasılık [0,1], exp() GEREKMİYOR.
         // Shape: [1, MaxLabelLen, SlotVocab]
         //
-        private DecodeResult DecodeSlot(ReadOnlySpan<float> data)
+        private DecodeResult DecodeSlot(ReadOnlySpan<float> data, int maxLabelLen, int slotVocab)
         {
-            var ids = new int[MaxLabelLen];
-            var tokenConf = new float[MaxLabelLen];
+            var ids = new int[maxLabelLen];
+            var tokenConf = new float[maxLabelLen];
 
-            for (int s = 0; s < MaxLabelLen; s++)
+            for (int s = 0; s < maxLabelLen; s++)
             {
                 int bestIdx = 0;
-                float bestProb = data[s * SlotVocab];
-                for (int v = 1; v < SlotVocab; v++)
+                int rowOffset = s * slotVocab;
+                float bestProb = data[rowOffset];
+                for (int v = 1; v < slotVocab; v++)
                 {
-                    float p = data[s * SlotVocab + v];
+                    float p = data[rowOffset + v];
                     if (p > bestProb) { bestProb = p; bestIdx = v; }
                 }
                 ids[s] = bestIdx;
@@ -197,7 +253,7 @@ namespace ALPR.Detection
 
             // İlk pad-olmayan token'ı bul
             int first = -1;
-            for (int i = 0; i < MaxLabelLen; i++)
+            for (int i = 0; i < maxLabelLen; i++)
                 if (ids[i] != PadIdx) { first = i; break; }
 
             if (first < 0)
@@ -215,16 +271,16 @@ namespace ALPR.Detection
             }
 
             // Metin bölgesinin sonunu (cutoff) bul ve internal_pad'i tespit et
-            int cutoff = MaxLabelLen;
+            int cutoff = maxLabelLen;
             bool internalPad = false;
 
-            for (int i = first; i < MaxLabelLen; i++)
+            for (int i = first; i < maxLabelLen; i++)
             {
                 if (ids[i] == PadIdx)
                 {
                     cutoff = i;
                     // cutoff'tan sonra pad-olmayan token var mı?
-                    for (int j = i + 1; j < MaxLabelLen; j++)
+                    for (int j = i + 1; j < maxLabelLen; j++)
                         if (ids[j] != PadIdx) { internalPad = true; break; }
                     break;
                 }
@@ -236,7 +292,11 @@ namespace ALPR.Detection
 
             for (int i = first; i < cutoff; i++)
             {
-                char c = Vocab[ids[i]];
+                int vocabIdx = ids[i];
+                if (vocabIdx < 0 || vocabIdx >= Vocab.Length)
+                    continue;
+
+                char c = Vocab[vocabIdx];
                 float cf = tokenConf[i];
                 sb.Append(c);
                 charConfs.Add(cf);
@@ -265,21 +325,23 @@ namespace ALPR.Detection
         // exp() ZORUNLU, aksi takdirde confidence değerleri negatif olur.
         // Shape: [1, seqLen, CtcVocab], blank = CtcBlank = 37
         //
-        private DecodeResult DecodeCTC(ReadOnlySpan<float> logData, int seqLen)
+        private DecodeResult DecodeCTC(ReadOnlySpan<float> logData, int seqLen, int ctcVocab)
         {
+            int ctcBlank = ctcVocab - 1;
+
             // log_softmax → softmax
-            var probs = new float[seqLen * CtcVocab];
+            var probs = new float[seqLen * ctcVocab];
             for (int t = 0; t < seqLen; t++)
             {
                 float sum = 0f;
-                for (int v = 0; v < CtcVocab; v++)
+                for (int v = 0; v < ctcVocab; v++)
                 {
-                    float p = MathF.Exp(logData[t * CtcVocab + v]);
-                    probs[t * CtcVocab + v] = p;
+                    float p = MathF.Exp(logData[t * ctcVocab + v]);
+                    probs[t * ctcVocab + v] = p;
                     sum += p;
                 }
                 float inv = 1f / MathF.Max(sum, 1e-8f);
-                for (int v = 0; v < CtcVocab; v++) probs[t * CtcVocab + v] *= inv;
+                for (int v = 0; v < ctcVocab; v++) probs[t * ctcVocab + v] *= inv;
             }
 
             // Greedy best-path
@@ -287,10 +349,10 @@ namespace ALPR.Detection
             for (int t = 0; t < seqLen; t++)
             {
                 int bi = 0;
-                float bp = probs[t * CtcVocab];
-                for (int v = 1; v < CtcVocab; v++)
+                float bp = probs[t * ctcVocab];
+                for (int v = 1; v < ctcVocab; v++)
                 {
-                    if (probs[t * CtcVocab + v] > bp) { bp = probs[t * CtcVocab + v]; bi = v; }
+                    if (probs[t * ctcVocab + v] > bp) { bp = probs[t * ctcVocab + v]; bi = v; }
                 }
                 path[t] = bi;
             }
@@ -304,14 +366,14 @@ namespace ALPR.Detection
             while (pos < seqLen)
             {
                 int idx = path[pos];
-                if (idx == CtcBlank) { pos++; continue; }
+                if (idx == ctcBlank) { pos++; continue; }
 
                 int start = pos;
                 while (pos < seqLen && path[pos] == idx) pos++;
 
                 // Bu token'ın span boyunca ortalama olasılığı
                 float avg = 0f;
-                for (int t = start; t < pos; t++) avg += probs[t * CtcVocab + idx];
+                for (int t = start; t < pos; t++) avg += probs[t * ctcVocab + idx];
                 avg /= (pos - start);
 
                 if (idx < Vocab.Length)
@@ -546,6 +608,10 @@ namespace ALPR.Detection
             };
         }
 
-        public void Dispose() => _session?.Dispose();
+        public void Dispose()
+        {
+            _session?.Dispose();
+            _clahe?.Dispose();
+        }
     }
 }

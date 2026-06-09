@@ -8,9 +8,9 @@ using System.Runtime.InteropServices;
 namespace ALPR.Detection
 {
     /// <summary>
-    /// ONNX modeli kullanarak plaka karakteri tespiti yapan sýnýf.
-    /// Thread-safe deðildir, her thread için ayrý instance oluþturulmalýdýr.
-    /// GPU desteði: CUDA (NVIDIA), DirectML (Windows) ve CPU
+    /// ONNX modeli kullanarak plaka karakteri tespiti yapan sï¿½nï¿½f.
+    /// Thread-safe deï¿½ildir, her thread iï¿½in ayrï¿½ instance oluï¿½turulmalï¿½dï¿½r.
+    /// GPU desteï¿½i: CUDA (NVIDIA), DirectML (Windows) ve CPU
     /// </summary>
     public sealed class PlateCharDetector : IDisposable
     {
@@ -22,9 +22,10 @@ namespace ALPR.Detection
         private readonly int _inputHeight;
         private readonly int _inputWidth;
         private readonly bool _swapRB;
+        private readonly Type _inputElementType;
         private bool _disposed;
 
-        private const int BlankTokenIndex = 36; // Bu ayar KESÝNLÝKLE KORUNMALI!
+        private const int BlankTokenIndex = 36; // Bu ayar KESï¿½NLï¿½KLE KORUNMALI!
 
         private readonly string[] PlateVocabulary = new string[]
         {
@@ -34,19 +35,22 @@ namespace ALPR.Detection
             " ", // Index 36: Blank Token.
         };
 
-        // Modelin beklediði kesin giriþ boyutlarý
+        // Modelin beklediï¿½i kesin giriï¿½ boyutlarï¿½
         private const int InputHeight = 64;
         private const int InputWidth = 128;
-        private const string InputName = "input"; // Model metadata'sýndan alýndý
+        private const string InputName = "input"; // Model metadata'sï¿½ndan alï¿½ndï¿½
 
-        // Karakter sýnýflarý: 0-9 rakamlar, sonra A-Z harfler
-        private static readonly string[] CharacterClasses = BuildCharacterClasses();
+        // Karakter sï¿½nï¿½flarï¿½: 0-9 rakamlar, sonra A-Z harfler
+        private static readonly Lazy<string[]> CharacterClassesLazy =
+            new Lazy<string[]>(() => BuildCharacterClasses());
+
+        private static string[] CharacterClasses => CharacterClassesLazy.Value;
 
         /// <summary>
-        /// Karakter tespit modelini yükler. GPU desteði ile optimize edilmiþ.
+        /// Karakter tespit modelini yï¿½kler. GPU desteï¿½i ile optimize edilmiï¿½.
         /// </summary>
         /// <param name="modelPath">ONNX model dosya yolu</param>
-        /// <param name="swapRB">RGB-BGR renk kanallarýný deðiþtir</param>
+        /// <param name="swapRB">RGB-BGR renk kanallarï¿½nï¿½ deï¿½iï¿½tir</param>
         /// <param name="useGpu">GPU kullan (true: CUDA/DirectML otomatik tespit, false: sadece CPU)</param>
         public PlateCharDetector(string modelPath, bool swapRB = false, bool useGpu = true)
         {
@@ -54,12 +58,12 @@ namespace ALPR.Detection
                 throw new ArgumentNullException(nameof(modelPath));
 
             if (!File.Exists(modelPath))
-                throw new FileNotFoundException($"Model dosyasý bulunamadý: {modelPath}", modelPath);
+                throw new FileNotFoundException($"Model dosyasï¿½ bulunamadï¿½: {modelPath}", modelPath);
 
             _swapRB = swapRB;
 
-            // GPU/CPU SessionOptions oluþtur - ExecutionProviderHelper kullanarak
-            // Python'daki providers=['DmlExecutionProvider', 'CUDAExecutionProvider', 'CPUExecutionProvider'] ile ayný mantýk
+            // GPU/CPU SessionOptions oluï¿½tur - ExecutionProviderHelper kullanarak
+            // Python'daki providers=['DmlExecutionProvider', 'CUDAExecutionProvider', 'CPUExecutionProvider'] ile aynï¿½ mantï¿½k
             var sessionOptions = ExecutionProviderHelper.CreateOptimizedSessionOptions(preferGpu: useGpu);
 
             try
@@ -67,23 +71,26 @@ namespace ALPR.Detection
                 _session = new InferenceSession(modelPath, sessionOptions);
                 _inputName = _session.InputMetadata.Keys.First();
 
-                (_inputHeight, _inputWidth) = InferInputDimensions(_session.InputMetadata[_inputName].Dimensions);
+                var inputMetadata = _session.InputMetadata[_inputName];
+                (_inputHeight, _inputWidth) = InferInputDimensions(inputMetadata.Dimensions);
+                _inputElementType = inputMetadata.ElementType;
 
-                // Log model yükleme bilgisi
-                System.Diagnostics.Debug.WriteLine($"? PlateCharDetector yüklendi: {Path.GetFileName(modelPath)}");
+                // Log model yï¿½kleme bilgisi
+                System.Diagnostics.Debug.WriteLine($"? PlateCharDetector yï¿½klendi: {Path.GetFileName(modelPath)}");
                 System.Diagnostics.Debug.WriteLine($"   Input: {_inputName} [{_inputHeight}x{_inputWidth}]");
-                System.Diagnostics.Debug.WriteLine($"   GPU: {(useGpu ? "Ýstendi (CUDA/DirectML)" : "Pasif - CPU Only")}");
+                System.Diagnostics.Debug.WriteLine($"   Data Type: {_inputElementType.Name}");
+                System.Diagnostics.Debug.WriteLine($"   GPU: {(useGpu ? "ï¿½stendi (CUDA/DirectML)" : "Pasif - CPU Only")}");
             }
             catch (Exception ex)
             {
                 sessionOptions?.Dispose();
-                System.Diagnostics.Debug.WriteLine($"? PlateCharDetector yükleme hatasý: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"? PlateCharDetector yï¿½kleme hatasï¿½: {ex.Message}");
                 throw;
             }
         }
 
         /// <summary>
-        /// Plaka görüntüsünden OCR ile metin okuma (GPU destekli)
+        /// Plaka gï¿½rï¿½ntï¿½sï¿½nden OCR ile metin okuma (GPU destekli)
         /// </summary>
         public CharacterDetectionResult2 RunOnnxPlateRecognition(Bitmap bitmap)
         {
@@ -91,12 +98,240 @@ namespace ALPR.Detection
             using var resizedMat = new Mat();
 
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            Cv2.Resize(mat, resizedMat, new OpenCvSharp.Size(InputWidth, InputHeight));
+            Cv2.Resize(mat, resizedMat, new OpenCvSharp.Size(_inputWidth, _inputHeight));
 
-            // Renk çevirme: BGR -> RGB 
+            // Renk ï¿½evirme: BGR -> RGB 
             Cv2.CvtColor(resizedMat, resizedMat, ColorConversionCodes.BGR2RGB);
 
-            // Tensör oluþtur (B, H, W, C) -> { 1, 64, 128, 3 }
+            // Model veri tipine gï¿½re tensor oluï¿½tur ve tahmin yap
+            object inputResult = _inputElementType.Name switch
+            {
+                nameof(Byte) => RunInferenceWithByteInput(resizedMat),
+                nameof(Single) => RunInferenceWithFloatInput(resizedMat),
+                nameof(Half) => RunInferenceWithFloat16Input(resizedMat),
+                _ => throw new NotSupportedException($"Veri tipi desteklenmiyor: {_inputElementType.Name}")
+            };
+
+            var (plateText, elapsed) = ((string, long))inputResult;
+
+            sw.Stop();
+
+            return new CharacterDetectionResult2(plateText, elapsed);
+        }
+
+        private (string, long) RunInferenceWithByteInput(Mat resizedMat)
+        {
+            var expectedDims = _session.InputMetadata[_inputName].Dimensions;
+            if (expectedDims[0] < 1) expectedDims[0] = 1; // Fix dynamic batch
+
+            var inputTensor = new DenseTensor<byte>(expectedDims);
+            bool isNCHW = expectedDims.Length == 4 && expectedDims[1] == 3;
+
+            for (int y = 0; y < _inputHeight; y++)
+            {
+                for (int x = 0; x < _inputWidth; x++)
+                {
+                    var color = resizedMat.At<Vec3b>(y, x);
+                    if (isNCHW)
+                    {
+                        inputTensor[0, 0, y, x] = color.Item0; // R
+                        inputTensor[0, 1, y, x] = color.Item1; // G
+                        inputTensor[0, 2, y, x] = color.Item2; // B
+                    }
+                    else
+                    {
+                        inputTensor[0, y, x, 0] = color.Item0; // R
+                        inputTensor[0, y, x, 1] = color.Item1; // G
+                        inputTensor[0, y, x, 2] = color.Item2; // B
+                    }
+                }
+            }
+
+            var inputs = new List<NamedOnnxValue>
+            {
+                NamedOnnxValue.CreateFromTensor<byte>(_inputName, inputTensor)
+            };
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                using var results = _session.Run(inputs);
+
+                if (results == null || !results.Any())
+                {
+                    System.Diagnostics.Debug.WriteLine("?? ONNX sonuï¿½ boï¿½ dï¿½ndï¿½ (Byte)");
+                    return ("", 0);
+                }
+
+                var firstResult = results.First();
+                if (firstResult == null)
+                {
+                    System.Diagnostics.Debug.WriteLine("?? ONNX ilk sonuï¿½ null (Byte)");
+                    return ("", 0);
+                }
+
+                var outputTensor = firstResult.AsTensor<float>();
+                if (outputTensor == null)
+                {
+                    System.Diagnostics.Debug.WriteLine("?? Output tensor null (Byte)");
+                    return ("", 0);
+                }
+
+                string plateText = DecodeCTC(outputTensor);
+                sw.Stop();
+                return (plateText, sw.ElapsedMilliseconds);
+            }
+            catch (Exception ex)
+            {
+                sw.Stop();
+                System.Diagnostics.Debug.WriteLine($"? Byte inference hatasï¿½: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"   Stack: {ex.StackTrace}");
+                return ("", 0);
+            }
+        }
+
+        private (string, long) RunInferenceWithFloatInput(Mat resizedMat)
+        {
+            var expectedDims = _session.InputMetadata[_inputName].Dimensions;
+            if (expectedDims[0] < 1) expectedDims[0] = 1;
+
+            var inputTensor = new DenseTensor<float>(expectedDims);
+            bool isNCHW = expectedDims.Length == 4 && expectedDims[1] == 3;
+
+            for (int y = 0; y < _inputHeight; y++)
+            {
+                for (int x = 0; x < _inputWidth; x++)
+                {
+                    var color = resizedMat.At<Vec3b>(y, x);
+                    if (isNCHW)
+                    {
+                        inputTensor[0, 0, y, x] = color.Item0 / 255f;
+                        inputTensor[0, 1, y, x] = color.Item1 / 255f;
+                        inputTensor[0, 2, y, x] = color.Item2 / 255f;
+                    }
+                    else
+                    {
+                        inputTensor[0, y, x, 0] = color.Item0 / 255f;
+                        inputTensor[0, y, x, 1] = color.Item1 / 255f;
+                        inputTensor[0, y, x, 2] = color.Item2 / 255f;
+                    }
+                }
+            }
+
+            var inputs = new List<NamedOnnxValue>
+            {
+                NamedOnnxValue.CreateFromTensor<float>(_inputName, inputTensor)
+            };
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                using var results = _session.Run(inputs);
+                if (results == null || !results.Any())
+                {
+                    System.Diagnostics.Debug.WriteLine("?? ONNX sonuï¿½ boï¿½ dï¿½ndï¿½ (Float)");
+                    return ("", 0);
+                }
+
+                var firstResult = results.First();
+                if (firstResult == null)
+                {
+                    System.Diagnostics.Debug.WriteLine("?? ONNX ilk sonuï¿½ null (Float)");
+                    return ("", 0);
+                }
+
+                var outputTensor = firstResult.AsTensor<float>();
+                if (outputTensor == null)
+                {
+                    System.Diagnostics.Debug.WriteLine("?? Output tensor null (Float)");
+                    return ("", 0);
+                }
+
+                string plateText = DecodeCTC(outputTensor);
+                sw.Stop();
+                return (plateText, sw.ElapsedMilliseconds);
+            }
+            catch (Exception ex)
+            {
+                sw.Stop();
+                System.Diagnostics.Debug.WriteLine($"? Float inference hatasï¿½: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"   Stack: {ex.StackTrace}");
+                return ("", 0);
+            }
+        }
+
+        private (string, long) RunInferenceWithFloat16Input(Mat resizedMat)
+        {
+            var expectedDims = _session.InputMetadata[_inputName].Dimensions;
+            if (expectedDims[0] < 1) expectedDims[0] = 1;
+
+            var inputTensor = new DenseTensor<Half>(expectedDims);
+            bool isNCHW = expectedDims.Length == 4 && expectedDims[1] == 3;
+
+            for (int y = 0; y < _inputHeight; y++)
+            {
+                for (int x = 0; x < _inputWidth; x++)
+                {
+                    var color = resizedMat.At<Vec3b>(y, x);
+                    if (isNCHW)
+                    {
+                        inputTensor[0, 0, y, x] = (Half)(color.Item0 / 255f);
+                        inputTensor[0, 1, y, x] = (Half)(color.Item1 / 255f);
+                        inputTensor[0, 2, y, x] = (Half)(color.Item2 / 255f);
+                    }
+                    else
+                    {
+                        inputTensor[0, y, x, 0] = (Half)(color.Item0 / 255f);
+                        inputTensor[0, y, x, 1] = (Half)(color.Item1 / 255f);
+                        inputTensor[0, y, x, 2] = (Half)(color.Item2 / 255f);
+                    }
+                }
+            }
+
+            var inputs = new List<NamedOnnxValue>
+            {
+                NamedOnnxValue.CreateFromTensor<Half>(_inputName, inputTensor)
+            };
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                using var results = _session.Run(inputs);
+                if (results == null || !results.Any())
+                {
+                    System.Diagnostics.Debug.WriteLine("?? ONNX sonuï¿½ boï¿½ dï¿½ndï¿½ (Float16)");
+                    return ("", 0);
+                }
+
+                var firstResult = results.First();
+                if (firstResult == null)
+                {
+                    System.Diagnostics.Debug.WriteLine("?? ONNX ilk sonuï¿½ null (Float16)");
+                    return ("", 0);
+                }
+
+                var outputTensor = firstResult.AsTensor<float>();
+                if (outputTensor == null)
+                {
+                    System.Diagnostics.Debug.WriteLine("?? Output tensor null (Float16)");
+                    return ("", 0);
+                }
+
+                string plateText = DecodeCTC(outputTensor);
+                sw.Stop();
+                return (plateText, sw.ElapsedMilliseconds);
+            }
+            catch (Exception ex)
+            {
+                sw.Stop();
+                System.Diagnostics.Debug.WriteLine($"? Float16 inference hatasï¿½: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"   Stack: {ex.StackTrace}");
+                return ("", 0);
+            }
+        }
+
+        private DenseTensor<byte> CreateByteInput(Mat resizedMat)
+        {
             var inputTensor = new DenseTensor<byte>(new[] { 1, InputHeight, InputWidth, 3 });
 
             for (int y = 0; y < InputHeight; y++)
@@ -110,25 +345,49 @@ namespace ALPR.Detection
                 }
             }
 
-            // ONNX ile tahmin (GPU üzerinde çalýþýr)
-            var inputs = new List<NamedOnnxValue>
+            return inputTensor;
+        }
+
+        private DenseTensor<float> CreateFloatInput(Mat resizedMat)
+        {
+            var inputTensor = new DenseTensor<float>(new[] { 1, InputHeight, InputWidth, 3 });
+
+            for (int y = 0; y < InputHeight; y++)
             {
-                NamedOnnxValue.CreateFromTensor(InputName, inputTensor)
-            };
+                for (int x = 0; x < InputWidth; x++)
+                {
+                    var color = resizedMat.At<Vec3b>(y, x);
+                    // 0-255'ten 0.0-1.0'a normalize et
+                    inputTensor[0, y, x, 0] = color.Item0 / 255f; // R
+                    inputTensor[0, y, x, 1] = color.Item1 / 255f; // G
+                    inputTensor[0, y, x, 2] = color.Item2 / 255f; // B
+                }
+            }
 
-            using var results = _session.Run(inputs);
-            var outputTensor = results.First().AsTensor<float>();
+            return inputTensor;
+        }
 
-            // CTC post-processing
-            string plateText = DecodeCTC(outputTensor);
+        private DenseTensor<Float16> CreateFloat16Input(Mat resizedMat)
+        {
+            var inputTensor = new DenseTensor<Float16>(new[] { 1, InputHeight, InputWidth, 3 });
 
-            sw.Stop();
+            for (int y = 0; y < InputHeight; y++)
+            {
+                for (int x = 0; x < InputWidth; x++)
+                {
+                    var color = resizedMat.At<Vec3b>(y, x);
+                    // 0-255'ten 0.0-1.0'a normalize et
+                    inputTensor[0, y, x, 0] = (Float16)(color.Item0 / 255f); // R
+                    inputTensor[0, y, x, 1] = (Float16)(color.Item1 / 255f); // G
+                    inputTensor[0, y, x, 2] = (Float16)(color.Item2 / 255f); // B
+                }
+            }
 
-            return new CharacterDetectionResult2(plateText, sw.ElapsedMilliseconds);
+            return inputTensor;
         }
 
         /// <summary>
-        /// CTC çýktýsýný Greedy Decoding ile plaka metnine çevirir
+        /// CTC ï¿½ï¿½ktï¿½sï¿½nï¿½ Greedy Decoding ile plaka metnine ï¿½evirir
         /// </summary>
         private string DecodeCTC(Tensor<float> outputTensor)
         {
@@ -146,7 +405,7 @@ namespace ALPR.Detection
                 sequenceLength = dimensions[0];
                 vocabularySize = dimensions[1];
             }
-            
+
             var resultChars = new List<string>();
             string lastChar = "";
 
@@ -169,7 +428,7 @@ namespace ALPR.Detection
                 string currentChar = PlateVocabulary[bestIndex];
                 bool isBlank = (bestIndex == BlankTokenIndex);
 
-                // CTC Greedy Kurallarý
+                // CTC Greedy Kurallarï¿½
                 if (!isBlank)
                 {
                     resultChars.Add(currentChar);
@@ -182,14 +441,14 @@ namespace ALPR.Detection
         }
 
         /// <summary>
-        /// Model metadata'sýndan input boyutlarýný çýkarýr.
+        /// Model metadata'sï¿½ndan input boyutlarï¿½nï¿½ ï¿½ï¿½karï¿½r.
         /// </summary>
         private static (int Height, int Width) InferInputDimensions(ReadOnlySpan<int> dims)
         {
             if (dims.Length < 4)
                 return (DefaultModelSize, DefaultModelSize);
 
-            // NCHW formatý (batch, channel, height, width)
+            // NCHW formatï¿½ (batch, channel, height, width)
             if (dims[1] == 3)
             {
                 int h = dims[2] > 0 ? dims[2] : DefaultModelSize;
@@ -197,7 +456,7 @@ namespace ALPR.Detection
                 return (h, w);
             }
 
-            // NHWC formatý (batch, height, width, channel)
+            // NHWC formatï¿½ (batch, height, width, channel)
             if (dims[3] == 3)
             {
                 int h = dims[1] > 0 ? dims[1] : DefaultModelSize;
@@ -210,7 +469,7 @@ namespace ALPR.Detection
         }
 
         /// <summary>
-        /// ROI görüntüsünde karakter tespiti yapar (eski metod - uyumluluk için korunuyor)
+        /// ROI gï¿½rï¿½ntï¿½sï¿½nde karakter tespiti yapar (eski metod - uyumluluk iï¿½in korunuyor)
         /// </summary>
         public CharacterDetectionResult Detect(
             Bitmap roiBitmap,
