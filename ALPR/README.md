@@ -24,17 +24,19 @@ Example license plate detection (image mode):
 
 ## Technologies 🛠️
 
-- Framework & Language: .NET 9.0, C# 13
+- Framework & Language: .NET (net10.0-windows7.0) / C#
 - UI: Windows Forms
-- AI/ML: ONNX Runtime, YOLOv8 (recommended), custom OCR models
+- AI/ML: ONNX Runtime (GPU support optional), YOLO-style detection runners, custom OCR models
 - Image processing: OpenCvSharp, System.Drawing
-- NuGet packages:
+- NuGet packages (as in `ALPR.csproj`):
 
 ```
-<PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.17.0" />
-<PackageReference Include="OpenCvSharp4" Version="4.9.0" />
-<PackageReference Include="OpenCvSharp4.Extensions" Version="4.9.0" />
-<PackageReference Include="OpenCvSharp4.runtime.win" Version="4.9.0" />
+<PackageReference Include="Microsoft.ML.OnnxRuntime.Gpu" Version="1.26.0" />
+<PackageReference Include="OpenCvSharp4" Version="4.13.0.20260602" />
+<PackageReference Include="OpenCvSharp4.Extensions" Version="4.13.0.20260602" />
+<PackageReference Include="OpenCvSharp4.runtime.win" Version="4.13.0.20260602" />
+<PackageReference Include="System.Numerics.Tensors" Version="10.0.8" />
+<PackageReference Include="SharpCompress" Version="0.49.1" />
 ```
 
 ## Installation ⚙️
@@ -53,10 +55,15 @@ git clone https://github.com/yourusername/ALPR.git
 cd ALPR
 ```
 
-Place the required ONNX model files in the project folder:
+Place the ONNX model files expected by the app in the `models/` folder (filenames used by the UI code):
 
-- `LicencePlateDetection.onnx`    # plate detection model
-- `PlateLetterExtraction.onnx`    # character recognition model
+- `models/LicencePlateDetection_Gpu.onnx`        # V1 plate detector (GPU-ready variant)
+- `models/plateRecognitionV2.onnx`               # V2 plate recognition model (YOLO runner)
+- `models/cct_s_v1_global.onnx`                  # OCR model (S variant)
+- `models/titan_armor_v8.onnx`                   # Titan V8 OCR/detector (optional)
+- `models/parseq_fp16_fp32_sim.onnx`             # Parseq OCR model (optional)
+
+Note: `frmALPR` will show "(Bulunamadı)" if a model file is missing.
 
 Build:
 
@@ -79,27 +86,32 @@ Image mode:
 
 1. Click `Resim Seç` (Select Image)
 2. Choose an image to process
-3. Configure settings: Confidence threshold (recommended: 0.60), NMS (recommended: 0.45)
-4. Start processing and review logs
+3. Configure settings in the UI (defaults shown):
+  - Plate confidence (`Plaka Güven`): default 0.11
+  - NMS IoU (`NMS`): default 0.45
+  - Character confidence (`Kar. Güven`): default 0.03
+4. Start processing and review the log area (`Tespit Bilgileri`)
 
 Video mode:
 
 1. Click `Video Seç` (Select Video)
-2. Choose your video file (MP4, AVI, MKV, MOV)
-3. Set `Frame Atla` (Frame Skip): 0 = every frame, 2 = every 3rd frame (recommended), 5 = every 6th frame
+2. Choose a video file (MP4, AVI, MKV, MOV)
+3. Set `Frame Atla` (Frame Skip): default 2 (process every 3rd frame); 0 = every frame
 4. Click `Başlat` (Start) and monitor FPS and detections
 
 ## Configuration and Tuning 🔧
 
-- Confidence threshold — controls detection sensitivity
-- NMS threshold — filters overlapping detections
-- Frame skip — trade-off between speed and accuracy
+- Default detection + UI values (from `frmALPR`):
+  - Plate confidence (`nudConfidenceThreshold`): 0.11
+  - NMS IoU (`nudNMSThreshold`): 0.45
+  - Character confidence (`nudCharConfidence`): 0.03
+  - Frame skip (`nudFrameSkip`): 2
 
-Recommended presets:
+Recommended presets (adjust to your hardware and use case):
 
-- High quality: Confidence 0.70, NMS 0.45, Frame Skip 0 (FPS ~5–8)
-- Balanced: Confidence 0.60, NMS 0.45, Frame Skip 2 (FPS ~15–20)
-- Fast: Confidence 0.50, NMS 0.50, Frame Skip 5 (FPS ~25–35)
+- High quality: Confidence 0.70, NMS 0.45, Frame Skip 0
+- Balanced: Confidence 0.60, NMS 0.45, Frame Skip 2
+- Fast: Confidence 0.50, NMS 0.50, Frame Skip 5
 
 ## Performance Benchmarks 📈
 
@@ -183,9 +195,14 @@ Commit message conventions:
 - `perf:` performance improvements
 - `test:` adding tests
 
-## Known Issues ⚠️
+## GPU & Execution Providers ⚠️
 
-- GPU support is not enabled by default — to enable use `Microsoft.ML.OnnxRuntime.Gpu` package
+The project includes code to attempt GPU execution providers. The `ExecutionProviderHelper` checks available providers and the app exposes a `GPU Kullan` checkbox in the UI. If GPU is not available the code will fall back to CPU. To enable GPU inference install a matching ONNX Runtime GPU package and the appropriate drivers (CUDA / DirectML / TensorRT) for your hardware.
+
+If you encounter provider errors, check the app log area (`Tespit Bilgileri`) which shows detected providers and helpful diagnostics.
+
+## Known Issues
+
 - Webcam support is not yet available (planned for v2.0)
 - Some video codecs may not be supported — convert with FFmpeg if needed
 
